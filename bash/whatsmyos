@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#
+# whatsmyos - returns a simplified name for the current operating system
+#
+
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+case "$OS" in
+  linux*)
+    echo "linux"
+    ;;
+  darwin*)
+    echo "macos"
+    ;;
+  cygwin*|mingw*|msys*)
+    echo "windows"
+    ;;
+  freebsd*|openbsd*|netbsd*)
+    echo "bsd"
+    ;;
+  sunos*)
+    echo "solaris"
+    # what are you doing running solaris?
+    ;;
+  *)
+    echo "unknown"
+    exit 1
+    ;;
+esac
