@@ -1,5 +1,5 @@
 ##
-# bash aliases
+# bash/zsh aliases
 ##
 
 alias ll='ls -lah'

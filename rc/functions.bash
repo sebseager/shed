@@ -1,3 +1,3 @@
 ##
-# bash functions
+# bash/zsh functions
 ##
