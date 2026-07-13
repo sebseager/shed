@@ -77,6 +77,8 @@ __indent() {
 
 _venv_usage() {
   cat << HEREDOC
+${BLD}venv${RST} - python virtual environment manager
+
 ${BLD}usage${RST}: venv <command> [args]
 
 ${BLD}commands${RST}:

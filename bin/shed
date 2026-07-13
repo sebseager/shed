@@ -30,7 +30,7 @@ fi
 IND=""   # extra indent prepended to run/act output (set within the link phase)
 
 say()    { printf '%s\n' "$*"; }
-hdr()    { printf '\n%s%s%s\n' "$CYN" "$*" "$RST"; }
+hdr()    { printf '\n%s%s%s\n' "$BLD$CYN" "$*" "$RST"; }
 field()  { printf '  %s%-6s%s %s\n' "$DIM" "$1" "$RST" "$2"; }   # label + value
 warn()   { printf '%swarning:%s %s\n' "$YLW" "$RST" "$*" >&2; }
 die()    { printf '%serror:%s %s\n' "$RED" "$RST" "$*" >&2; exit "${2:-1}"; }
