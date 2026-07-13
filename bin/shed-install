@@ -58,7 +58,7 @@ link_one() {
         say "            $cur  ->  $src"
         run rm -f "$dst"
     elif [ -e "$dst" ]; then
-        bak="$dst.shed-bak.$STAMP"
+        bak="$dst.bak.$STAMP"
         say "  backup:   $dst -> $bak"
         run mv "$dst" "$bak"
     fi
