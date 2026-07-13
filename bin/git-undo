@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#
+# git undo [n]
+# reset --mixed HEAD~n, with a warning if it rewrites pushed history
+#
+
+set -euo pipefail
+
+n="${1:-1}"
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "error: not inside a git repo" >&2; exit 1
+}
+
+if ! [[ "$n" =~ ^[0-9]+$ ]] || [ "$n" -eq 0 ]; then
+    echo "error: invalid number of commits to undo: $n" >&2; exit 1
+fi
+
+pushed_affected=0
+if upstream=$(git rev-parse --symbolic-full-name --abbrev-ref '@{u}' 2>/dev/null); then
+    unpushed=$(git rev-list "${upstream}..HEAD" | wc -l)
+    [ "$n" -gt "$unpushed" ] && pushed_affected=1
+fi
+
+if [ "$pushed_affected" -eq 1 ]; then
+    echo "this undoes $n commit(s), some already pushed to '$upstream':"
+    git log --oneline -n "$n"
+    echo
+    echo "this rewrites public history."
+    read -r -p "proceed? [y/N] " reply || reply=""
+    case "$reply" in
+        [yY]) ;;
+        *) echo "aborted" >&2; exit 1 ;;
+    esac
+fi
+
+git reset --mixed "HEAD~$n"
+
+if [ "$pushed_affected" -eq 1 ]; then
+    echo
+    echo "local branch now diverges from '$upstream'."
+    echo "to overwrite remote: git push --force-with-lease"
+fi

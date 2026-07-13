@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+#
+# git subsync
+# init and update all submodules recursively
+#
+
+set -euo pipefail
+
+git submodule update --init --recursive

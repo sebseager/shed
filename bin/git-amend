@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#
+# git amend
+# stage everything and amend the last commit, keeping its message
+#
+
+set -euo pipefail
+
+git add -A
+git commit --amend --no-edit

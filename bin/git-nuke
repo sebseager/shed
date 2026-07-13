@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+#
+# git nuke
+# hard reset to HEAD and delete untracked files/dirs (destructive)
+#
+
+set -euo pipefail
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "error: not inside a git repo" >&2; exit 1
+}
+
+if [ -t 1 ]; then red=$(tput setaf 1); rst=$(tput sgr0); else red=""; rst=""; fi
+
+echo "${red}WARNING: destroys all uncommitted changes AND untracked files.${rst}"
+echo "you will be reset to:"
+git log --oneline -1
+echo
+read -r -p ">> proceed with nuke? [y/N] " reply || reply=""
+case "$reply" in
+    [yY]) ;;
+    *) echo "aborted" >&2; exit 1 ;;
+esac
+
+git reset --hard HEAD
+git clean -fd

@@ -1,1 +1,30 @@
 *.exe filter=lfs diff=lfs merge=lfs -text
+
+# by default, normalize text to LF in the repo
+* text=auto
+
+# Scripts & sourced fragments: ALWAYS LF, even when checked out on Windows.
+# A CRLF shebang line breaks the script on Linux/macOS.
+*.bash    text eol=lf
+*.sh      text eol=lf
+*.fish    text eol=lf
+bin/*     text eol=lf
+
+# Shell dotfiles that are really scripts
+.bashrc   text eol=lf
+.zshrc    text eol=lf
+.profile  text eol=lf
+.vimrc    text eol=lf
+
+# SSH config: plain text, force LF (public + private copies)
+dot/.ssh/config          text eol=lf
+private/dot/.ssh/config  text eol=lf
+
+# fonts
+*.ttf     binary
+*.otf     binary
+*.woff    binary
+*.woff2   binary
+
+# windows registry needs to be preserved exactly as-is
+*.reg     -text
