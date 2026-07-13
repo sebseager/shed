@@ -24,12 +24,13 @@ fi
 SHED_OS="$(bash "$SHED_ROOT/bin/whatsmyos" 2>/dev/null || echo unknown)"
 export SHED_OS
 
-# PATH: os/<os>/bin then bin/, dedup-guarded
+# PATH: shed bin/ and os/<os>/bin highest, then ~/.local/bin, dedup-guarded
 _shed_addpath() {
     [ -d "$1" ] || return 0
     case ":$PATH:" in *":$1:"*) return 0 ;; esac
     PATH="$1:$PATH"
 }
+_shed_addpath "$HOME/.local/bin"
 _shed_addpath "$SHED_ROOT/os/$SHED_OS/bin"
 _shed_addpath "$SHED_ROOT/bin"
 export PATH
