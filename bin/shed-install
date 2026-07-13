@@ -77,15 +77,36 @@ link_tree() {
     done
 }
 
-say "shed: $SHED_ROOT"
 say "os:   $SHED_OS"
+say "shed: $SHED_ROOT"
 [ "$DRY_RUN" -eq 1 ] && say "(dry run, nothing will change)"
 say ""
 
-if [ -d "$SHED_ROOT/private" ] && [ ! -d "$SHED_ROOT/private/dot" ]; then
-    say "note: private/ has no dot/, submodule may be uninitialized:"
-    say "      git -C \"$SHED_ROOT\" submodule update --init"
+if [ -f "$SHED_ROOT/.gitmodules" ] && command -v git >/dev/null 2>&1; then
+    say "modules:"
+    git config --file "$SHED_ROOT/.gitmodules" --get-regexp '^submodule\..*\.path$' |
+        while read -r key path; do
+            name=${key#submodule.}
+            name=${name%.path}
+            url=$(git config --file "$SHED_ROOT/.gitmodules" --get "submodule.$name.url" || true)
+            say "  $path: $url"
+        done || true
+fi
+
+# best-effort init of the private submodule; needs access to that repo
+if [ -f "$SHED_ROOT/.gitmodules" ] && command -v git >/dev/null 2>&1; then
     say ""
+    if [ "$DRY_RUN" -eq 1 ]; then
+        say "  [dry-run] git -C \"$SHED_ROOT\" submodule update --init --recursive"
+        say ""
+    elif ! git -C "$SHED_ROOT" submodule update --init --recursive; then
+        say ""
+        say "| Could not init submodules. Do you have access?"
+        say "| We'll skip for now. Once you can reach the repo, run:"
+        say "|   git -C \"$SHED_ROOT\" submodule update --init --recursive"
+        say "| then re-run shed-install."
+        say ""
+    fi
 fi
 
 # link in ascending precedence: base, then os-specific, then private
