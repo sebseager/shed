@@ -11,7 +11,8 @@ set -euo pipefail
 
 CLI_VERSION="0.4"
 DEFAULT_VENV=".venv"
-PYTHON="python"
+# prefer python3, fallback to python (windows, git bash, etc.)
+PYTHON="$(command -v python3 || command -v python || echo python3)"
 
 ##
 # colors
@@ -415,8 +416,8 @@ _venv_doctor() {
     set +e
     (( ++total ))
     if command -v "$PYTHON" >/dev/null 2>&1; then
-      py_ver=$("$PYTHON" --version 2>&1 | sed 's/^Python //')
-      py_major=${py_ver%%.*}  
+      py_ver=$("$PYTHON" --version 2>&1 | awk '{print $2}')
+      py_major=${py_ver%%.*}
       if (( py_major >= 3 )); then
         # check if venv is available
         "$PYTHON" -m venv -h >/dev/null 2>&1
