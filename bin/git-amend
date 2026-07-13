@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
 #
 # git amend
-# stage everything and amend the last commit, keeping its message
+# stage everything and amend the last commit
+#   git amend            keep the existing message (no-op if nothing changed)
+#   git amend <message>  use the given message
 #
 
 set -euo pipefail
 
 git add -A
-git commit --amend --no-edit
+
+if [ "$#" -gt 0 ]; then
+    # if message given, reword last commit and fold in any staged changes
+    git commit --amend -m "$*"
+else
+    # if no message, keep existing one, but don't rewrite an unchanged commit
+    if git diff --cached --quiet HEAD; then
+        echo "git-amend: nothing to amend (working tree clean)" >&2
+        exit 0
+    fi
+    git commit --amend --no-edit
+fi
