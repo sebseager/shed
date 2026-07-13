@@ -408,7 +408,7 @@ _venv_doctor() {
   (
     local passed=0
     local total=0
-    local current_shell rc_path rc_line hint
+    local current_shell rc_path hint
 
     printf "%s\n\n" "checking venv installation... 🔍"
 
@@ -451,22 +451,6 @@ _venv_doctor() {
       __indent "you may need to create it: touch $rc_path"
     fi
 
-    # check rc file contains venv initialization
-    (( ++total ))
-    if [[ -f "$rc_path" ]] && grep -q 'venv-cli shellenv' "$rc_path"; then
-      echo "${GRN}${total}. venv-cli shellenv call found in rc file${RST}"
-      (( ++passed ))
-    else
-      echo "${YLW}${total}. shellenv call not found in rc file${RST}"
-      hint="add the correct line for your shell"
-      if [[ "$current_shell" == "zsh" || "$current_shell" == "bash" ]]; then
-        hint+=": ${BLD}eval \"\$(venv-cli shellenv)\"${RST}"
-      elif [[ "$current_shell" == "fish" ]]; then
-        hint+=": ${BLD}venv-cli shellenv | source${RST}"
-      fi
-      __indent "$hint"
-    fi
-
     # check if venv command would be available in a fresh shell
     (( ++total ))
     set +e
@@ -495,6 +479,13 @@ _venv_doctor() {
       (( ++passed ))
     else
       echo "${RED}${total}. new shell does not load venv cli${RST}"
+      hint="ensure venv-cli is on PATH and your shell rc runs (or sources a file that runs)"
+      if [[ "$current_shell" == "fish" ]]; then
+        hint+=": ${BLD}venv-cli shellenv | source${RST}"
+      else
+        hint+=": ${BLD}eval \"\$(venv-cli shellenv)\"${RST}"
+      fi
+      __indent "$hint"
     fi
     set -e
 
