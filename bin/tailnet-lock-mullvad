@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+#
+# tailnet-lock-mullvad - add mullvad exit nodes to tailnet lock
+#
+
+set -euo pipefail
+
+##
+# colors
+##
+
+BLD=$(tput bold)
+RST=$(tput sgr0)
+RED=$(tput setaf 1)
+GRN=$(tput setaf 2)
+YLW=$(tput setaf 3)
+
+##
+# helpers
+##
+
+usage() {
+  local me
+  me=$(basename -- "$0")
+  cat << HEREDOC
+${BLD}usage${RST}: $me [options]
+
+${BLD}description${RST}:
+  Signs unsigned Mullvad exit nodes in the Tailnet Lock.
+  
+  Queries tailscale lock status, identifies unsigned Mullvad nodes
+  (*.mullvad.ts.net), and signs them.
+
+${BLD}optional args${RST}:
+  -h, --help     show this help message and exit
+  -d, --dry-run  show what would be done without actually signing
+HEREDOC
+}
+
+##
+# main functions
+##
+
+filter_mullvad_nodes() {
+  local status_json="$1"
+  local result
+  result=$(echo "$status_json" | jq -r '.FilteredPeers[] | select(.Name | endswith(".mullvad.ts.net.")) | "\(.Name)\t\(.NodeKey)"' 2>&1)
+  local jq_exit=$?
+  if [[ $jq_exit -ne 0 ]]; then
+    echo "${RED}error:${RST} $result" >&2
+    return 1
+  fi
+  echo "$result"
+}
+
+sign_node() {
+  local node_key="$1"
+  local node_name="$2"
+  local dry_run="${3:-false}"
+  if [[ "$dry_run" == "true" ]]; then
+    echo "${YLW}[dry run]${RST} $node_name $node_key"
+    return 0
+  fi
+  printf "signing: %s.. " "$node_name"
+  if tailscale lock sign "$node_key" >/dev/null 2>&1; then
+    echo "${GRN}done${RST}"
+    echo "    ($node_key)"
+    return 0
+  else
+    echo "${RED}failed${RST}"
+    return 1
+  fi
+}
+
+main() {
+  local dry_run=false
+  
+  # parse arguments
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      -h|--help) usage; exit 0 ;;
+      -d|--dry-run) dry_run=true; shift ;;
+      *) echo "unknown option '$1'"; exit 1 ;;
+    esac
+  done
+  
+  # get lock status
+  printf "fetching tailnet lock status... "
+  local status_json
+  if status_json=$(tailscale lock status --json 2>/dev/null); then
+    echo "${GRN}done${RST}"
+  else
+    echo "${RED}failed${RST}"
+    exit 1
+  fi
+  
+  # extract nodes
+  local mullvad_nodes
+  mullvad_nodes=$(filter_mullvad_nodes "$status_json")
+  if [[ -z "$mullvad_nodes" ]]; then
+    echo "no unsigned mullvad nodes found"
+    exit 0
+  fi
+  
+  # count nodes
+  local total_unsigned
+  total_unsigned=$(echo "$status_json" | jq '.FilteredPeers | length')
+  local total_mullvad
+  total_mullvad=$(echo "$mullvad_nodes" | wc -l | xargs)
+  
+  echo "unsigned nodes: $total_unsigned total, $total_mullvad mullvad"
+  echo ""
+  
+  # sign each mullvad node
+  local count=0
+  local errors=0
+  while IFS=$'\t' read -r node_name node_key; do
+    if sign_node "$node_key" "$node_name" "$dry_run"; then
+      ((count++))
+    else
+      ((errors++))
+    fi
+    sleep 0.1  # avoid rate limits
+  done <<< "$mullvad_nodes"
+  
+  if [[ "$dry_run" == "true" ]]; then
+    echo ""
+    echo "${YLW}[dry run]${RST} would have signed $count nodes"
+  else
+    echo ""
+    echo "signed $count mullvad nodes, $errors errors"
+  fi
+}
+
+main "$@"

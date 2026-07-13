@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+#
+# cheat - fetches cheat sheets from cheat.sh and displays them with less
+#
+
+CHTSH_URL=${CHTSH_URL:-"https://cht.sh"}
+
+usage() {
+  cat <<EOF
+usage:
+  cheat -h, -help       show this help and exit
+  cheat <query>         query cheat.sh
+                          -> cheat git
+                          -> cheat python reverse a list
+  cheat -s [language]   enter shell mode (optionally with language context)
+                          -> cheat -s go
+
+shell mode usage:
+  exit                  exit shell mode
+  <query>               in shell mode, you can enter queries directly
+  cd <language>         change language context
+                          -> cd python
+  /<language> <query>   run a query in another language without changing context
+                          -> /js array map
+EOF
+  exit 0
+}
+
+do_query() {
+  local query="$*"
+  # replace spaces with + for the URL, except first space becomes /
+  query=$(echo "$query" | sed 's/ /\//; s/ /+/g')
+  curl -sSL "${CHTSH_URL}/${query}" | less -R
+}
+
+shell_mode() {
+  local section="$1"
+  
+  while true; do
+    if [ -n "$section" ]; then
+      prompt="cht.sh/$section> "
+    else
+      prompt="cht.sh> "
+    fi
+    
+    # read input with line editing
+    read -e -p "$prompt" input
+    
+    # skip empty lines
+    [ -z "$input" ] && continue
+    
+    # handle commands
+    case "$input" in
+      exit)
+        exit 0
+        ;;
+      cd\ *)
+        new_section="${input#cd }"
+        new_section="${new_section// /}"  # remove spaces
+        new_section="${new_section#"${new_section%%[!/]*}"}"  # remove leading slashes
+        if [ -z "$new_section" ]; then
+          section=""
+        else
+          section="$new_section"
+        fi
+        ;;
+      /*)
+        # query in different language without changing context
+        query="${input#/}"
+        do_query "$query"
+        ;;
+      *)
+        # regular query
+        if [ -n "$section" ]; then
+          do_query "$section $input"
+        else
+          do_query "$input"
+        fi
+        ;;
+    esac
+  done
+}
+
+# Parse arguments
+case "${1:-}" in
+  ""|--help|-h)
+    usage
+    ;;
+  -s)
+    shift
+    shell_mode "$*"
+    ;;
+  *)
+    do_query "$@"
+    ;;
+esac

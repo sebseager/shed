@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+#
+# etcher - creates a bootable USB drive from a disk image (macOS only)
+#
+# Because this is a bit dangerous, I haven't added a --force option. If you
+# really want to run it a bunch of times, you can pipe it through `yes`.
+#
+
+usage() {
+  cat << HEREDOC
+usage: $(basename -- "$0") <image> [-d <dev>]
+
+required args:
+  <image>  path to the disk image to write
+
+optional args:
+  -h,--help  show this help message and exit
+  -d <dev>   device to flash (default: ask)
+HEREDOC
+}
+
+# text effects
+BLD="$(tput bold)"
+RED="$(tput setaf 1)"
+GRN="$(tput setaf 2)"
+MGN="$(tput setaf 5)"
+CYN="$(tput setaf 6)"
+ITL="$(tput sitm)"
+REV="$(tput smso)"
+RST=$(tput sgr0)
+
+# variables
+image=""
+device=""
+
+get_args() {
+  local positional=()
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      -h|--help) usage; exit 0 ;;
+      -d) device="$2"; shift; shift ;;
+      -*) echo "unknown option '$1'" >&2; usage >&2; exit 1 ;;
+      *) positional+=("$1"); shift ;;
+    esac
+  done
+  image="${positional[0]}"
+  if [[ -z "$image" ]]; then
+    echo "missing required argument <image>" >&2; usage >&2; exit 1
+  fi
+  return 0
+}
+
+# lists all external disks via macOS diskutil
+echo_disks() {
+  diskutil list "$1" | while IFS= read -r line; do
+    if echo "$line" | grep -qE '^/dev/disk[0-9]+[[:space:]]+\(.*\):'; then
+        dev=$(echo "$line" | awk '{print $1}')
+        info=$(diskutil info "$dev")
+        name=$(echo "$info" | awk -F ':' '/Device \/ Media Name/ {
+          gsub(/^[ \t]+/, "", $2);
+          print $2;
+          exit
+        }')
+        size=$(echo "$info" | awk -F ':' '/^ *Disk Size/ {
+          gsub(/^[ \t]+/, "", $2);
+          split($2, parts, " ");
+          print parts[1] " " parts[2];
+          exit
+        }')
+        printf "  ${MGN}${BLD}%s${RST} (%s) - ${ITL}%s${RST}\n" "$dev" "$size" "$name"
+      fi
+  done
+  return 0
+}
+
+# check we're on macOS
+case "$(whatsmyos)" in
+  macos) ;;
+  *)
+    echo "${RED}error${RST}: this script only works on macOS" >&2
+    exit 1
+    ;;
+esac
+
+get_args "$@"
+
+# confirm that image exists
+if [[ ! -r "$image" ]]; then
+  echo "${RED}error${RST}: cannot read '$image'" >&2
+  exit 1
+fi
+if ! file -b --mime-type "$image" | grep -q 'iso'; then
+  echo "${RED}error${RST}: invalid disk image '$image'" >&2
+  exit 1
+fi
+
+set -e
+
+# if file ends in .iso, try to convert to .dmg
+echo
+if [[ "$image" =~ \.iso$ ]]; then
+  dmg="${image%.iso}.dmg"
+  printf "%s\n" "It looks like that's a .iso image, and I'd recommend converting it to"
+  printf "%s" "a .dmg image before writing. This new image will "
+  if [[ -f "$dmg" ]]; then
+    printf "%s\n" "${REV}overwrite a file${RST} at:"
+  else
+    printf "%s\n" "be created at:"
+  fi
+  printf "%s\n\n" "${CYN}$dmg${RST}"
+  answer=""
+  while [[ ! "$answer" =~ ^[yYnN]$ ]]; do
+    echo -n ">> is that okay? (y/n) "
+    read -r answer
+    answer=$(echo "$answer" | tr '[:upper:]' '[:lower:]')
+  done
+  if [[ "$answer" =~ ^[yY] ]]; then
+    echo "converting iso to dmg..."
+    if rm -f "$dmg" && hdiutil convert -format UDRW -o "$dmg" "$image"; then
+      image="$dmg"
+      echo "${GRN}success${RST}: using the dmg from now on"
+    else
+      echo "${RED}error${RST}: failed to convert '$image' to '$dmg'" >&2
+      exit 1
+    fi
+  else
+    echo "skipping conversion and continuing with the iso"
+  fi
+fi
+
+# print available devices
+echo
+boxify -l 3 -r 4 << HEREDOC
+
+Available Devices
+
+Internal
+$(echo_disks internal)
+
+External
+$(echo_disks external)
+
+HEREDOC
+echo
+
+# if we don't have a valid block device, ask for it
+while [[ ! -b "$device" ]]; do
+  echo -n ">> which device do you want to use? "; read -r device
+done
+
+# unmount the device
+echo "unmounting ${MGN}$device${RST}..."
+if ! diskutil unmountDisk "$device"; then
+  echo "${RED}error${RST}: failed to unmount ${MGN}$device${RST}" >&2
+  exit 1
+fi
+
+# confirm everything
+echo
+boxify -l 3 -r 3 -b red << HEREDOC
+
+${RED}${BLD}WARNING!${RST} YOU'RE ABOUT TO DESTROY ${BLD}$device${RST}
+
+HEREDOC
+echo; echo -n ">> type 'yes' to proceed: "; read -r answer
+answer=$(echo "$answer" | tr '[:upper:]' '[:lower:]')
+if [[ "$answer" != "yes" ]]; then
+  echo "okay, aborting now"
+  exit 1
+fi
+
+# perform the write
+echo "writing ${CYN}$image${RST} to ${MGN}$device${RST}..."
+if ! sudo dd if="$image" bs=1M of="$device" status=progress; then
+  echo "${RED}error${RST}: failed to write ${CYN}$image${RST} to ${MGN}$device${RST}" >&2
+  exit 1
+fi
+
+echo "${GRN}success${RST} you can now eject ${MGN}$device${RST}"

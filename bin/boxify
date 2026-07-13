@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+#
+# boxify - draws a box around text
+#
+
+usage() {
+  # build list of named colors
+  local color_names
+  for color in "${COLORS[@]}"; do
+    key="${color%%::*}"
+    color_names+="$key, "
+  done
+  color_names=${color_names%, }
+
+  # help message
+  local me
+  me=$(basename -- "$0")
+  cat << HEREDOC
+usage: $me -l <pad> -r <pad> -c <clr> -b <clr>
+
+input:
+  text is read from stdin, via pipe or here-string:
+    echo "howdy" | $me 2
+    $me 3 <<< "howdy"
+
+optional args:
+  -h,--help  show this help message and exit
+  -l <pad>   padding to the left of the text (default: 1)
+  -r <pad>   padding to the right of the text (default: 1)
+  -c <clr>   text color name or tput code (default: no change)
+  -b <clr>   border color name or tput code (default: no change)
+
+notes:
+  Colors are: $color_names.
+  Any other value will be interpreted as a tput color code and
+  used as-is.
+HEREDOC
+}
+
+# constants
+COLORS=(
+  "black::0"
+  "red::1"
+  "green::2"
+  "yellow::3"
+  "blue::4"
+  "magenta::5"
+  "cyan::6"
+  "white::7"
+)
+
+# variables
+lpadding=1
+rpadding=1
+text_color=""
+line_color=""
+
+get_args() {
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      -h|--help) usage; exit 0 ;;
+      -l) lpadding="$2"; shift; shift ;;
+      -r) rpadding="$2"; shift; shift ;;
+      -c) text_color="$2"; shift; shift ;;
+      -b) line_color="$2"; shift; shift ;;
+      *) echo "unknown option '$1'" >&2; usage >&2; exit 1 ;;
+    esac
+  done
+  if [[ ! ("$lpadding" =~ ^[0-9]+$ && "$rpadding" =~ ^[0-9]+$) ]]; then
+    echo "error: padding must be a positive integer" >&2
+    exit 1
+  fi
+  return 0
+}
+
+change_color() {
+  local input="${1:-white}"  # default to white
+  local code="$input"  # default to using raw input as the color code
+  for entry in "${COLORS[@]}"; do
+    local key="${entry%%::*}"
+    local val="${entry##*::}"
+    if [[ "$key" == "$input" ]]; then code="$val"; break; fi
+  done
+  tput setaf "$code"
+}
+
+reset_color() {
+  tput sgr0
+}
+
+# removes all CSI sequences of the form ESC [ ... final‑byte
+strip_ansi() {
+  # \(B covers the reset sequence (tput sgr0)
+  sed -E 's/\x1b(\[[0-9;]*[a-zA-Z]|\(B)//g'
+}
+
+# gets the number of visible characters in a string
+n_visible() {
+  local visible
+  visible=$(printf '%b' "$1" | strip_ansi)
+  echo ${#visible}
+}
+
+# gets the number of invisible characters in a string
+n_ansi() {
+  local raw stripped
+  raw=$(printf '%b' "$1")
+  stripped=$(printf '%b' "$1" | strip_ansi)
+  echo $(( ${#raw} - ${#stripped} ))
+}
+
+boxify() {
+  local lpad="$1"
+  local rpad="$2"
+  local fgclr="$3"
+  local lnclr="$4"
+  local lines=()
+  local ncols=0
+
+  # read input lines and calculate max visible width (without ANSI codes)
+  while IFS= read -r line; do
+    lines+=("$line")
+    nvis=$(n_visible "$line")
+    if (( nvis > ncols )); then
+      ncols=$nvis
+    fi
+  done
+
+  # draw top bar
+  local hbar
+  hbar=$(printf '─%.0s' $(seq 1 $((ncols + lpad + rpad))))
+  [[ -n "$lnclr" ]] && change_color "$lnclr"
+  printf "┌%s┐\n" "$hbar"
+  [[ -n "$lnclr" ]] && reset_color
+
+  # draw each line of text
+  local nvis
+  for line in "${lines[@]}"; do
+    [[ -n "$lnclr" ]] && change_color "$lnclr"
+    printf "│"
+    [[ -n "$lnclr" ]] && reset_color
+    [[ -n "$fgclr" ]] && change_color "$fgclr"
+    nvis=$(n_visible "$line")
+    printf '%*s%s%*s' "$lpad" "" "$line" $((ncols + rpad - nvis)) ""
+    [[ -n "$fgclr" ]] && reset_color
+    [[ -n "$lnclr" ]] && change_color "$lnclr"
+    printf "│\n"
+    [[ -n "$lnclr" ]] && reset_color
+  done
+
+  # draw bottom bar
+  [[ -n "$lnclr" ]] && change_color "$lnclr"
+  printf "└%s┘\n" "$hbar"
+  [[ -n "$lnclr" ]] && reset_color
+
+  return 0
+}
+
+get_args "$@"
+boxify "$lpadding" "$rpadding" "$text_color" "$line_color"

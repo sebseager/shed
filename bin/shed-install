@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+#
+# shed-install
+# symlink shed dotfiles into $HOME (leaf-level, merge-safe)
+#
+# real directories are created in $HOME and individual files are symlinked, so
+# dot/, os/<os>/dot/ and private/dot/ can all contribute files to the same
+# directory (e.g. ~/.ssh) without either clobbering the other.
+# precedence: private/dot beats os/<os>/dot beats dot. real files are backed up.
+#
+
+set -euo pipefail
+
+DRY_RUN=0
+usage() {
+    cat <<'EOF'
+shed-install - symlink shed dotfiles into $HOME (leaf-level, merge-safe)
+Usage: shed-install [-n|--dry-run] [-h|--help]
+EOF
+}
+for arg in "${@:-}"; do
+    case "$arg" in
+        -n|--dry-run) DRY_RUN=1 ;;
+        -h|--help)    usage; exit 0 ;;
+        "")           ;;
+        *)            echo "error: unknown arg: $arg" >&2; usage; exit 2 ;;
+    esac
+done
+
+# locate shed by resolving this file's symlink chain
+_shed_src="${BASH_SOURCE[0]:-$0}"
+while [ -L "$_shed_src" ]; do
+    _shed_link="$(readlink "$_shed_src")"
+    case "$_shed_link" in
+        /*) _shed_src="$_shed_link" ;;
+        *)  _shed_src="$(dirname "$_shed_src")/$_shed_link" ;;
+    esac
+done
+SHED_ROOT="$(cd "$(dirname "$_shed_src")/.." >/dev/null 2>&1 && pwd)"
+unset _shed_src _shed_link
+
+# os detection via bin/whatsmyos
+SHED_OS="$(bash "$SHED_ROOT/bin/whatsmyos" 2>/dev/null || echo unknown)"
+STAMP="$(date +%Y%m%d%H%M%S)"
+
+say() { printf '%s\n' "$*"; }
+run() { if [ "$DRY_RUN" -eq 1 ]; then say "  [dry-run] $*"; else "$@"; fi; }
+
+link_one() {
+    local src="$1" dst="$2" dstdir cur bak
+    dstdir="$(dirname "$dst")"
+    [ -d "$dstdir" ] || run mkdir -p "$dstdir"
+
+    if [ -L "$dst" ]; then
+        cur="$(readlink "$dst")"
+        [ "$cur" = "$src" ] && return 0          # already correct, idempotent
+        say "  override: $dst"
+        say "            $cur  ->  $src"
+        run rm -f "$dst"
+    elif [ -e "$dst" ]; then
+        bak="$dst.shed-bak.$STAMP"
+        say "  backup:   $dst -> $bak"
+        run mv "$dst" "$bak"
+    fi
+
+    run ln -s "$src" "$dst"
+    say "  link:     ${dst#$HOME/}"
+}
+
+link_tree() {
+    local root="$1" f rel
+    [ -d "$root" ] || return 0
+    say "from $root:"
+    find "$root" -type f -print0 | while IFS= read -r -d '' f; do
+        rel="${f#"$root"/}"
+        link_one "$f" "$HOME/$rel"
+    done
+}
+
+say "shed: $SHED_ROOT"
+say "os:   $SHED_OS"
+[ "$DRY_RUN" -eq 1 ] && say "(dry run, nothing will change)"
+say ""
+
+if [ -d "$SHED_ROOT/private" ] && [ ! -d "$SHED_ROOT/private/dot" ]; then
+    say "note: private/ has no dot/, submodule may be uninitialized:"
+    say "      git -C \"$SHED_ROOT\" submodule update --init"
+    say ""
+fi
+
+# link in ascending precedence: base, then os-specific, then private
+link_tree "$SHED_ROOT/dot"
+link_tree "$SHED_ROOT/os/$SHED_OS/dot"
+link_tree "$SHED_ROOT/private/dot"
+
+# secure ssh: dir 700, and repo-side files 600 (ssh checks the real file)
+if [ -e "$HOME/.ssh" ]; then
+    say ""
+    say "securing ~/.ssh"
+    run chmod 700 "$HOME/.ssh"
+    for d in "$SHED_ROOT/dot/.ssh" "$SHED_ROOT/os/$SHED_OS/dot/.ssh" "$SHED_ROOT/private/dot/.ssh"; do
+        [ -d "$d" ] || continue
+        find "$d" -type f -print0 | while IFS= read -r -d '' f; do
+            run chmod 600 "$f"
+        done
+    done
+fi
+
+say ""
+say "done."
+[ "$DRY_RUN" -eq 1 ] && say "(re-run without -n to apply)" || true
