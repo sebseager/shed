@@ -9,11 +9,11 @@ set -euo pipefail
 n="${1:-1}"
 
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
-    echo "error: not inside a git repo" >&2; exit 1
+    echo "git-undo: not inside a git repo" >&2; exit 1
 }
 
 if ! [[ "$n" =~ ^[0-9]+$ ]] || [ "$n" -eq 0 ]; then
-    echo "error: invalid number of commits to undo: $n" >&2; exit 1
+    echo "git-undo: invalid number of commits to undo: $n" >&2; exit 1
 fi
 
 pushed_affected=0
@@ -30,7 +30,7 @@ if [ "$pushed_affected" -eq 1 ]; then
     read -r -p "proceed? [y/N] " reply || reply=""
     case "$reply" in
         [yY]) ;;
-        *) echo "aborted" >&2; exit 1 ;;
+        *) echo "git-undo: aborted" >&2; exit 1 ;;
     esac
 fi
 
