@@ -2,8 +2,8 @@
 # bash/zsh functions
 ##
 
-# important: prefix ANYTHING shadowed by an alias with `command` to ignore
-#   the alias and keep behavior stable within functions.
+# IMPORTANT: prefix ANYTHING shadowed by an alias with `command` to ignore
+#            the alias and keep behavior stable within functions.
 
 # make a directory (and parents) then cd into it
 mkcd() {
