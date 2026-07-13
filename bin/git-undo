@@ -39,6 +39,6 @@ git reset --mixed "HEAD~$n"
 if [ "$pushed_affected" -eq 1 ]; then
     echo
     echo "Local branch now diverges from upstream $upstream."
-    echo "To overwrite remote:   git push --force-with-lease"
-    echo "To undo the undo:      git reset --soft ORIG_HEAD"
+    echo "To overwrite remote:  git push --force-with-lease  # before any fetch/pull"
+    echo "To undo the undo:     git reset --soft ORIG_HEAD   # before any git commands"
 fi
