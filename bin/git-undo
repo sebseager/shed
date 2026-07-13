@@ -23,11 +23,11 @@ if upstream=$(git rev-parse --symbolic-full-name --abbrev-ref '@{u}' 2>/dev/null
 fi
 
 if [ "$pushed_affected" -eq 1 ]; then
-    echo "this undoes $n commit(s), some already pushed to '$upstream':"
+    echo "Undoing $n commit(s), some of which were pushed to $upstream:"
     git log --oneline -n "$n"
     echo
-    echo "this rewrites public history."
-    read -r -p "proceed? [y/N] " reply || reply=""
+    echo "This will roll back public history."
+    read -r -p "Proceed? [y/N] " reply || reply=""
     case "$reply" in
         [yY]) ;;
         *) echo "git-undo: aborted" >&2; exit 1 ;;
@@ -38,6 +38,7 @@ git reset --mixed "HEAD~$n"
 
 if [ "$pushed_affected" -eq 1 ]; then
     echo
-    echo "local branch now diverges from '$upstream'."
-    echo "to overwrite remote: git push --force-with-lease"
+    echo "Local branch now diverges from upstream $upstream."
+    echo "To overwrite remote:   git push --force-with-lease"
+    echo "To undo the undo:      git reset --soft ORIG_HEAD"
 fi
