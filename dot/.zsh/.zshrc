@@ -11,8 +11,8 @@ while [ -L "$_shed_src" ]; do
         *)  _shed_src="${_shed_src:h}/$_shed_link" ;;
     esac
 done
-SHED_ROOT="$(cd "${_shed_src:h}/.." >/dev/null 2>&1 && pwd)"
-export SHED_ROOT
+export SHED_ROOT="${_shed_src:A:h:h:h}"
+echo "SHED_ROOT: $SHED_ROOT"
 unset _shed_src _shed_link
 
 if [ ! -d "$SHED_ROOT/bin" ]; then
@@ -49,6 +49,14 @@ _shed_source_dir "$SHED_ROOT/private/shell" sh     # secrets live here
 _shed_source_dir "$SHED_ROOT/private/shell" zsh
 
 # machine-specific, untracked
+[ -r "$HOME/.zshrc" ] && source "$HOME/.zshrc"
 [ -r "$HOME/.zshrc.local" ] && source "$HOME/.zshrc.local"
+[ -r "$ZDOTDIR/.zshrc.local" ] && source "$HOME/.zshrc.local"
 
-unset -f _shed_addpath _shed_source_dir
+# check to make sure shed is still on path
+if [[ $- == *i* && -n ${SHED_ROOT:-} ]]; then
+    (( ! ${path[(I)$SHED_ROOT/bin]} )) && 
+        print -u2 "shed: $SHED_ROOT/bin is not on PATH after bootstrapping!"
+fi
+
+unfunction _shed_addpath _shed_source_dir

@@ -20,9 +20,9 @@ set -euo pipefail
 # ---- colors ----------------------------------------------------------------
 
 if [ -t 1 ] && command -v tput >/dev/null 2>&1 && [ -n "${TERM:-}" ]; then
-    BLD=$(tput bold);    DIM=$(tput dim);      RST=$(tput sgr0)
-    RED=$(tput setaf 1); GRN=$(tput setaf 2);  YLW=$(tput setaf 3)
-    BLU=$(tput setaf 4); CYN=$(tput setaf 6)
+    RST=$(tput sgr0);    BLD=$(tput bold);     ITL=$(tput sitm);
+    RED=$(tput setaf 1); GRN=$(tput setaf 2);  YLW=$(tput setaf 3);
+    BLU=$(tput setaf 4); CYN=$(tput setaf 6);  DIM=$(tput dim)
 else
     BLD=; DIM=; RST=; RED=; GRN=; YLW=; BLU=; CYN=
 fi
@@ -50,23 +50,47 @@ ${BLD}commands:${RST}
   ${GRN}help${RST}        show this message
 
 ${BLD}options:${RST}
-  -n, --dry-run   show what would change without touching anything
+  -n, --dry-run           show what would change without touching anything
+  -S, --skip-modules      do not init/pull git submodules during install
 EOF
 }
+
+IGNORES=()  # paths to ignore (install-time, persisted for update)
 
 # ---- args ------------------------------------------------------------------
 
 CMD=""
 DRY_RUN=0
+SKIP_SUBMODULES=0
+
 for arg in "$@"; do
     case "$arg" in
         install|update|uninstall) CMD="$arg" ;;
         help|-h|--help)           usage; exit 0 ;;
         -n|--dry-run)             DRY_RUN=1 ;;
-        *) printf '%serror:%s unknown arg: %s\n\n' "$RED" "$RST" "$arg" >&2
-           usage >&2; exit 2 ;;
+        -S|--skip-modules)        SKIP_SUBMODULES=1 ;;
+        -I|--ignore)              WAIT_IGNORE=1 ;;
+        *)
+            if [ "${WAIT_IGNORE:-0}" -eq 1 ]; then
+                case "$arg" in
+                    "~")   IGNORES+=("$HOME") ;;
+                    "~/"*) IGNORES+=("$HOME/${arg#"~/"}") ;;
+                    *)     IGNORES+=("${arg%/}") ;;
+                esac
+                WAIT_IGNORE=0
+            else
+                printf '%serror:%s unknown arg: %s\n\n' "$RED" "$RST" "$arg" >&2
+                usage >&2
+                exit 2
+            fi
+            ;;
     esac
 done
+
+if [ "${WAIT_IGNORE:-0}" -eq 1 ]; then
+    warn "-I given without a path; ignoring"
+fi
+
 if [ -z "$CMD" ]; then usage >&2; exit 2; fi
 
 # ---- locate shed -----------------------------------------------------------
@@ -86,6 +110,7 @@ unset _shed_src _shed_link
 SHED_OS="$(bash "$SHED_ROOT/bin/whatsmyos" 2>/dev/null || echo unknown)"
 STAMP="$(date +%Y%m%d%H%M%S)"
 MANIFEST="${XDG_STATE_HOME:-$HOME/.local/state}/shed/manifest"
+IGNORE="${XDG_STATE_HOME:-$HOME/.local/state}/shed/ignore"
 
 run() { if [ "$DRY_RUN" -eq 1 ]; then printf '%s  %s[dry-run]%s %s\n' "$IND" "$DIM" "$RST" "$*"; else "$@"; fi; }
 
@@ -97,10 +122,48 @@ run() { if [ "$DRY_RUN" -eq 1 ]; then printf '%s  %s[dry-run]%s %s\n' "$IND" "$D
 
 MANIFEST_LINES=()   # collected as "<dst>\t<srcrel>" during a link pass
 
+# ---- ignore helpers ---------------------------------------------------------
+
+# returns 0 if path or any child is in IGNORES
+is_ignored() {
+    local p="${1%/}" i
+    for i in "${IGNORES[@]}"; do
+        case "$p" in "$i"|"$i"/*) return 0 ;; esac
+    done
+    return 1
+}
+
+# populate IGNORES from state file (if present)
+read_ignore() {
+    IGNORES=()
+    [ -e "$IGNORE" ] || return 1
+    if [ ! -r "$IGNORE" ]; then
+        warn "ignore file exists but is unreadable: $IGNORE"
+        return 2
+    fi
+    local line
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -n "$line" ] || continue
+        IGNORES+=("${line%/}")
+    done < "$IGNORE"
+    return 0
+}
+
+# persist IGNORES (install resets it)
+write_ignore() {
+    [ "$DRY_RUN" -eq 1 ] && return 0
+    local dir; dir="$(dirname "$IGNORE")"
+    if ! mkdir -p "$dir" 2>/dev/null; then
+        warn "could not create state dir $dir (skipping ignore file)"
+        return 0
+    fi
+    printf '%s\n' "${IGNORES[@]}" > "$IGNORE" 2>/dev/null || warn "could not write ignore: $IGNORE"
+}
+
 record_link() { MANIFEST_LINES+=("$1"$'\t'"$2"); }
 
 # a link is "ours" if it's a symlink whose target's tail matches the srcrel we
-# recorded — true whether it points at the current shed root or a stale one.
+# recorded -- true whether it points at the current shed root or a stale one.
 is_our_link() {
     local dst="$1" srcrel="$2" tgt
     [ -L "$dst" ] || return 1
@@ -134,7 +197,7 @@ write_manifest() {
     [ "$DRY_RUN" -eq 1 ] && return 0
     local dir; dir="$(dirname "$MANIFEST")"
     if ! mkdir -p "$dir" 2>/dev/null; then
-        warn "could not create state dir $dir; skipping manifest"
+        warn "could not create state dir $dir (skipping manifest)"
         warn "(uninstall/update won't be able to find these links later)"
         return 0
     fi
@@ -184,7 +247,11 @@ link_tree() {
     IND="  "
     while IFS= read -r -d '' f; do
         rel="${f#"$root"/}"
-        link_one "$f" "$HOME/$rel"
+        local dst="$HOME/$rel"
+        if is_ignored "$dst"; then
+            continue  # skip if destination is under ignored path(s)
+        fi
+        link_one "$f" "$dst"
     done < <(find "$root" -type f -print0)
     IND=""
 }
@@ -198,9 +265,11 @@ link_all() {
 
 # secure ssh: dir 700, and repo-side files 600 (ssh checks the real file)
 secure_ssh() {
-    [ -e "$HOME/.ssh" ] || return 0
+    local sshdir="$HOME/.ssh"
+    if is_ignored "$sshdir"; then return 0; fi
+    [ -e "$sshdir" ] || return 0
     hdr "securing ~/.ssh"
-    run chmod 700 "$HOME/.ssh"
+    run chmod 700 "$sshdir"
     local d f
     for d in "$SHED_ROOT/dot/.ssh" "$SHED_ROOT/os/$SHED_OS/dot/.ssh" "$SHED_ROOT/private/dot/.ssh"; do
         [ -d "$d" ] || continue
@@ -215,7 +284,11 @@ secure_ssh() {
 show_submodules() {
     [ -f "$SHED_ROOT/.gitmodules" ] || return 0
     command -v git >/dev/null 2>&1 || return 0
-    hdr "modules"
+    if [ "$SKIP_SUBMODULES" -eq 1 ]; then
+        hdr "modules $ITL(skipped)$RST"
+    else
+        hdr "modules"
+    fi
     git config --file "$SHED_ROOT/.gitmodules" --get-regexp '^submodule\..*\.path$' |
         while read -r key path; do
             local name url
@@ -243,7 +316,7 @@ init_submodules() {
 # ---- shared preamble / epilogue -------------------------------------------
 
 preamble() {
-    printf '%senvironment%s\n' "$CYN" "$RST"
+    printf '%senvironment%s\n' "$BLD$CYN" "$RST"
     field "os"   "$SHED_OS"
     field "shed" "$SHED_ROOT"
     if [ "$DRY_RUN" -eq 1 ]; then printf '  %s(dry run, nothing will change)%s\n' "$DIM" "$RST"; fi
@@ -260,7 +333,12 @@ epilogue() {
 cmd_install() {
     preamble
     show_submodules
-    init_submodules
+    if [ "$SKIP_SUBMODULES" -eq 0 ]; then
+        init_submodules
+    fi
+
+    # persist ignore list (install resets it)
+    write_ignore
 
     hdr "linking"
     link_all
@@ -272,6 +350,7 @@ cmd_install() {
 
 cmd_update() {
     preamble
+    read_ignore || true
 
     # snapshot the previous manifest so we can prune links dropped from shed
     read_manifest || true
@@ -290,6 +369,8 @@ cmd_update() {
         hdr "pruning removed dotfiles"
         local i pruned=0
         for ((i = 0; i < ${#old_dst[@]}; i++)); do
+            # never prune anything under ignored paths
+            if is_ignored "${old_dst[$i]}"; then continue; fi
             case "$new_dsts" in *$'\n'"${old_dst[$i]}"$'\n'*) continue ;; esac
             if is_our_link "${old_dst[$i]}" "${old_rel[$i]}"; then
                 act "$RED" "remove:" "${old_dst[$i]#$HOME/}"

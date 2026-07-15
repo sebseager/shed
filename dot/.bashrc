@@ -11,8 +11,7 @@ while [ -L "$_shed_src" ]; do
         *)  _shed_src="$(dirname "$_shed_src")/$_shed_link" ;;
     esac
 done
-SHED_ROOT="$(cd "$(dirname "$_shed_src")/.." >/dev/null 2>&1 && pwd)"
-export SHED_ROOT
+export SHED_ROOT="$(cd "$(dirname "$_shed_src")/.." >/dev/null 2>&1 && pwd)"
 unset _shed_src _shed_link
 
 if [ ! -d "$SHED_ROOT/bin" ]; then
@@ -50,5 +49,11 @@ _shed_source_dir "$SHED_ROOT/private/shell" bash
 
 # machine-specific, untracked
 [ -r "$HOME/.bashrc.local" ] && . "$HOME/.bashrc.local"
+
+# check to make sure shed is still on path
+if [[ $- == *i* && -n ${SHED_ROOT:-} ]]; then
+    [[ :$PATH: != *":$SHED_ROOT/bin:"* ]] && 
+        printf 'shed: %s/bin is not on PATH after bootstrapping!\n' "$SHED_ROOT"
+fi
 
 unset -f _shed_addpath _shed_source_dir

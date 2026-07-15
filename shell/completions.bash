@@ -1,5 +1,5 @@
 ##
-# bash programmable completion
+# bash completions
 ##
 
 # enable bash-completion (git, etc.) unless running in posix mode

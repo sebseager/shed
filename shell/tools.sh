@@ -1,5 +1,5 @@
 ##
-# shared tool integrations
+# shared tool integrations (bash/zsh)
 ##
 
 # make less peek inside archives and other non-text files

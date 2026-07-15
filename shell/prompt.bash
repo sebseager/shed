@@ -1,5 +1,5 @@
 ##
-# bash prompt configuration
+# bash prompt
 ##
 
 # trim \w to the last 2 path components, like zsh's %2~
