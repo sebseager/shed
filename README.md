@@ -40,3 +40,11 @@ link is recorded in a manifest under `${XDG_STATE_HOME:-~/.local/state}/shed/`
 so a later `install` or `uninstall` can find it again even after the shed
 directory has moved. The ignore set lives in
 `${XDG_CONFIG_HOME:-~/.config}/shed/ignore` and survives an uninstall.
+
+If you move the shed directory itself, every symlink dangles — including the
+shell bootstrapper, so `shed` silently falls off your `PATH`. Re-run install
+by path to repoint everything:
+
+```bash
+bash <new-location>/bin/shed install
+```

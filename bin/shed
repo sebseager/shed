@@ -291,6 +291,26 @@ link_all() {
     link_tree "$SHED_ROOT/private/dot"
 }
 
+# warn about bootstrap-critical files that didn't get linked -- without them,
+# shed never lands on PATH. the files self-identify with a "shed:bootstrap"
+# marker comment, so the list lives in the dotfiles, not here. $1 is the
+# newline-delimited set of destinations linked this run.
+check_bootstrap() {
+    local root f dst
+    for root in "$SHED_ROOT/dot" "$SHED_ROOT/os/$SHED_OS/dot" "$SHED_ROOT/private/dot"; do
+        [ -d "$root" ] || continue
+        while IFS= read -r f; do
+            dst="$HOME/${f#"$root"/}"
+            case "$1" in *$'\n'"$dst"$'\n'*) continue ;; esac
+            if is_ignored "$dst"; then
+                warn "$(tilde "$dst") is ignored; it's what puts shed on PATH (wire up $SHED_ROOT/bin yourself)"
+            else
+                warn "$(tilde "$dst") did not get linked; shed may not be on PATH"
+            fi
+        done < <(grep -rl 'shed:bootstrap' "$root" 2>/dev/null || true)
+    done
+}
+
 # secure ssh: dir 700, and repo-side files 600 (ssh checks the real file)
 secure_ssh() {
     local sshdir="$HOME/.ssh"
@@ -406,10 +426,14 @@ cmd_install() {
 
     write_manifest
     secure_ssh
+    check_bootstrap "$new_dsts"
 
     local extra=""
     [ "$pruned" -gt 0 ] && extra=", removed $pruned old link(s)"
     epilogue "installed ${#MANIFEST_LINES[@]} dotfile(s)$extra"
+    if [ "$DRY_RUN" -eq 0 ]; then
+        printf '%s(open a new shell, or exec $SHELL, to pick up PATH changes)%s\n' "$DIM" "$RST"
+    fi
 }
 
 cmd_ignore() {

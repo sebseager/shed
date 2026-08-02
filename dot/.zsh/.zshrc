@@ -1,6 +1,7 @@
 # .zshrc
 # shed bootstrapper, symlinked from shed/dot/.zsh/.zshrc to $ZDOTDIR/.zshrc,
 # read by interactive zsh
+# shed:bootstrap -- wires shed bin dirs onto PATH
 #
 
 # locate shed by resolving this file's symlink chain
@@ -24,11 +25,18 @@ fi
 SHED_OS="$(bash "$SHED_ROOT/bin/whatsmyos" 2>/dev/null || echo unknown)"
 export SHED_OS
 
-# PATH: shed bin/ and os/<os>/bin highest, then ~/.local/bin, dedup-guarded
+# PATH: shed bin/ and os/<os>/bin highest, then ~/.local/bin. an entry already
+# on PATH is moved to the front, not skipped: macos path_helper demotes
+# inherited entries in nested login shells (e.g. tmux), so presence alone
+# doesn't guarantee precedence
 _shed_addpath() {
     [ -d "$1" ] || return 0
-    case ":$PATH:" in *":$1:"*) return 0 ;; esac
-    PATH="$1:$PATH"
+    local p=":$PATH:"
+    while [ "${p#*:"$1":}" != "$p" ]; do
+        p="${p%%:"$1":*}:${p#*:"$1":}"
+    done
+    p="${p#:}"; p="${p%:}"
+    if [ -n "$p" ]; then PATH="$1:$p"; else PATH="$1"; fi
 }
 _shed_addpath "$HOME/.local/bin"
 _shed_addpath "$SHED_ROOT/os/$SHED_OS/bin"
