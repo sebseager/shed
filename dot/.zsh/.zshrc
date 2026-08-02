@@ -60,9 +60,23 @@ _shed_source_dir "$SHED_ROOT/private/shell" zsh
 [ -r "$HOME/.zshrc.local" ] && source "$HOME/.zshrc.local"
 [ -r "$ZDOTDIR/.zshrc.local" ] && source "$ZDOTDIR/.zshrc.local"
 
+# re-assert shed PATH precedence: anything sourced above may have overwritten
+# PATH wholesale. set SHED_NO_PATH_REASSERT=1 (e.g. in .zshrc.local) to let a
+# later script's PATH stand
+if [ -z "${SHED_NO_PATH_REASSERT:-}" ]; then
+    case ":$PATH:" in
+        *":$SHED_ROOT/bin:"*) ;;
+        *) print -u2 "shed: PATH was reset while sourcing rc files; re-adding shed entries" ;;
+    esac
+    _shed_addpath "$HOME/.local/bin"
+    _shed_addpath "$SHED_ROOT/os/$SHED_OS/bin"
+    _shed_addpath "$SHED_ROOT/bin"
+    export PATH
+fi
+
 # check to make sure shed is still on path
 if [[ $- == *i* && -n ${SHED_ROOT:-} ]]; then
-    (( ! ${path[(I)$SHED_ROOT/bin]} )) && 
+    (( ! ${path[(I)$SHED_ROOT/bin]} )) &&
         print -u2 "shed: $SHED_ROOT/bin is not on PATH after bootstrapping!"
 fi
 

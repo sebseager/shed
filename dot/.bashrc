@@ -58,10 +58,24 @@ _shed_source_dir "$SHED_ROOT/private/shell" bash
 # machine-specific, untracked
 [ -r "$HOME/.bashrc.local" ] && . "$HOME/.bashrc.local"
 
+# re-assert shed PATH precedence: anything sourced above may have overwritten
+# PATH wholesale. set SHED_NO_PATH_REASSERT=1 (e.g. in .bashrc.local) to let a
+# later script's PATH stand
+if [ -z "${SHED_NO_PATH_REASSERT:-}" ]; then
+    case ":$PATH:" in
+        *":$SHED_ROOT/bin:"*) ;;
+        *) printf 'shed: PATH was reset while sourcing rc files; re-adding shed entries\n' >&2 ;;
+    esac
+    _shed_addpath "$HOME/.local/bin"
+    _shed_addpath "$SHED_ROOT/os/$SHED_OS/bin"
+    _shed_addpath "$SHED_ROOT/bin"
+    export PATH
+fi
+
 # check to make sure shed is still on path
 if [[ $- == *i* && -n ${SHED_ROOT:-} ]]; then
-    [[ :$PATH: != *":$SHED_ROOT/bin:"* ]] && 
-        printf 'shed: %s/bin is not on PATH after bootstrapping!\n' "$SHED_ROOT"
+    [[ :$PATH: != *":$SHED_ROOT/bin:"* ]] &&
+        printf 'shed: %s/bin is not on PATH after bootstrapping!\n' "$SHED_ROOT" >&2
 fi
 
 unset -f _shed_addpath _shed_source_dir
