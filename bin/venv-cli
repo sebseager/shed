@@ -18,13 +18,17 @@ PYTHON="$(command -v python3 || command -v python || echo python3)"
 # colors
 ##
 
-BLD=$(tput bold)
-RST=$(tput sgr0)
-RED=$(tput setaf 1)
-GRN=$(tput setaf 2)
-YLW=$(tput setaf 3)
-MGN=$(tput setaf 5)
-CYN=$(tput setaf 6)
+if [ -t 1 ] && command -v tput >/dev/null 2>&1 && [ -n "${TERM:-}" ]; then
+  BLD=$(tput bold)
+  RST=$(tput sgr0)
+  RED=$(tput setaf 1)
+  GRN=$(tput setaf 2)
+  YLW=$(tput setaf 3)
+  MGN=$(tput setaf 5)
+  CYN=$(tput setaf 6)
+else
+  BLD=; RST=; RED=; GRN=; YLW=; MGN=; CYN=
+fi
 
 ##
 # helpers

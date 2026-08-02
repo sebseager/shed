@@ -28,10 +28,9 @@ alias ..='cd ..'
 alias ...='cd ../..'
 alias ....='cd ../../..'
 
-# human-readable sizes
+# human-readable sizes (free lives in functions.sh: macos needs a real shim)
 alias df='df -h'
 alias du='du -h'
-alias free='free -h'
 
 # git shortcuts
 alias g='git'
@@ -47,5 +46,11 @@ alias gl='git log --oneline --graph --decorate'
 
 # misc
 alias path='echo "$PATH" | tr ":" "\n"'
-alias ports='ss -tulpn'
 alias reload='exec "$SHELL" -l'
+
+# listening sockets: ss on linux, lsof on macos/bsd
+if command -v ss >/dev/null 2>&1; then
+    alias ports='ss -tulpn'
+else
+    alias ports='lsof -nP -iTCP -sTCP:LISTEN'
+fi

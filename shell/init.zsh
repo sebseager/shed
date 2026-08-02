@@ -13,7 +13,10 @@
 ZSH_COMPLETIONS_DIR="$ZDOTDIR/completions"
 mkdir -p "$ZSH_COMPLETIONS_DIR"
 
-typeset -U fpath  # dedup fpath so harmless duplicates don't trigger rebuilds
+# dedup fpath so harmless duplicates don't trigger rebuilds. -g is required:
+# this file is sourced from inside a function, and a bare typeset would make
+# fpath local to it, breaking every autoload once it returns
+typeset -gU fpath
 fpath=("$ZSH_COMPLETIONS_DIR" $fpath)
 
 ##
@@ -72,7 +75,7 @@ install_completion() {
 
 install_completion docker  "docker completion zsh"
 install_completion podman  "podman completion zsh"
-install_completion gh      "gh completion --zsh"
+install_completion gh      "gh completion -s zsh"
 unfunction install_completion
 
 ##
@@ -84,6 +87,8 @@ ZSH_COMPINIT_TTL=24
 () {
     emulate -L zsh
     setopt extendedglob nullglob
+
+    local lock="$ZSH_COMPDUMP.lock"
 
     # exit if another shell is here
     if [[ -e $lock ]]; then
@@ -98,10 +103,11 @@ ZSH_COMPINIT_TTL=24
         rm -f -- "$lock"  # stale or bad lock, remove and proceed
     fi
 
-    # grab the lock and ensure rm on exit
-    mkdir -p ${ZSH_COMPDUMP:h}
+    # grab the lock and ensure rm on exit. the trap fires after this
+    # function's locals are gone, so bake the path in with ${(q)...}
+    mkdir -p "${ZSH_COMPDUMP:h}"
     print -r -- $$ >| "$lock"
-    trap 'rm -f "$lock"' EXIT
+    trap "rm -f ${(q)lock}" EXIT
 
     # (re)init if missing or older than ZSH_COMPINIT_TTL hours
     if [[ ! -e $ZSH_COMPDUMP || -n "$ZSH_COMPDUMP"(#qN.mh+${ZSH_COMPINIT_TTL}) ]]; then

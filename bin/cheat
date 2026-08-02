@@ -43,8 +43,8 @@ shell_mode() {
       prompt="cht.sh> "
     fi
     
-    # read input with line editing
-    read -e -p "$prompt" input
+    # read input with line editing; exit cleanly on EOF (ctrl-d)
+    read -r -e -p "$prompt" input || exit 0
     
     # skip empty lines
     [ -z "$input" ] && continue

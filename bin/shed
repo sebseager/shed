@@ -2,8 +2,12 @@
 #
 # shed - manage shed dotfiles
 #
-#   shed install    symlink shed dotfiles into $HOME (leaf-level, merge-safe)
-#   shed update     repoint/refresh symlinks (e.g. after moving the shed dir)
+#   shed install    symlink shed dotfiles into $HOME (leaf-level, merge-safe).
+#                   idempotent: re-run any time to converge -- link new files,
+#                   repoint links after the shed dir moves, prune links whose
+#                   source left the tree, evict links from newly ignored paths
+#   shed ignore     add paths to the ignore set; with no paths, list it
+#   shed unignore   remove paths from the ignore set (interactive without args)
 #   shed uninstall  remove all symlinks shed created in $HOME
 #
 # real directories are created in $HOME and individual files are symlinked, so
@@ -11,8 +15,13 @@
 # directory (e.g. ~/.ssh) without either clobbering the other.
 # precedence: private/dot beats os/<os>/dot beats dot. real files are backed up.
 #
-# every link shed creates is recorded in a manifest so uninstall/update can find
-# them again even after the shed directory has moved.
+# ignored paths are user territory: shed never links into or below them.
+# ignore/unignore only edit the persisted set; install applies it, evicting
+# shed's own links from newly ignored paths (backups stay put).
+#
+# every link shed creates is recorded in a manifest (state dir) so a later
+# install or uninstall can find it again even after the shed directory has
+# moved. the ignore set lives in the config dir and survives uninstall.
 #
 
 set -euo pipefail
@@ -24,7 +33,7 @@ if [ -t 1 ] && command -v tput >/dev/null 2>&1 && [ -n "${TERM:-}" ]; then
     RED=$(tput setaf 1); GRN=$(tput setaf 2);  YLW=$(tput setaf 3);
     BLU=$(tput setaf 4); CYN=$(tput setaf 6);  DIM=$(tput dim)
 else
-    BLD=; DIM=; RST=; RED=; GRN=; YLW=; BLU=; CYN=
+    BLD=; DIM=; ITL=; RST=; RED=; GRN=; YLW=; BLU=; CYN=
 fi
 
 IND=""   # extra indent prepended to run/act output (set within the link phase)
@@ -34,64 +43,74 @@ hdr()    { printf '\n%s%s%s\n' "$BLD$CYN" "$*" "$RST"; }
 field()  { printf '  %s%-6s%s %s\n' "$DIM" "$1" "$RST" "$2"; }   # label + value
 warn()   { printf '%swarning:%s %s\n' "$YLW" "$RST" "$*" >&2; }
 die()    { printf '%serror:%s %s\n' "$RED" "$RST" "$*" >&2; exit "${2:-1}"; }
-# act <color> <label> <msg> — an aligned, colorized action line
+# act <color> <label> <msg> -- an aligned, colorized action line
 act()    { printf '%s  %s%-9s%s %s\n' "$IND" "$1" "$2" "$RST" "$3"; }
+tilde()  { case "$1" in "$HOME"|"$HOME"/*) printf '~%s' "${1#"$HOME"}" ;; *) printf '%s' "$1" ;; esac; }
 
 usage() {
     cat <<EOF
 ${BLD}shed${RST} - manage shed dotfiles
 
-${BLD}usage:${RST} shed <command> [-n|--dry-run]
+${BLD}usage:${RST} shed <command> [options] [path ...]
 
 ${BLD}commands:${RST}
-  ${GRN}install${RST}     symlink shed dotfiles into \$HOME (merge-safe)
-  ${GRN}update${RST}      repoint/refresh symlinks (e.g. after moving the shed dir)
+  ${GRN}install${RST}     symlink shed dotfiles into \$HOME (merge-safe, idempotent;
+              re-run any time to converge)
+  ${GRN}ignore${RST}      add paths to the ignore set; with no paths, list it
+  ${GRN}unignore${RST}    remove paths from the ignore set; with no paths, pick
+              from a list
   ${GRN}uninstall${RST}   remove all symlinks shed created in \$HOME
   ${GRN}help${RST}        show this message
 
 ${BLD}options:${RST}
   -n, --dry-run           show what would change without touching anything
-  -S, --skip-modules      do not init/pull git submodules during install
+  -S, --skip-modules      install: do not init/pull git submodules
+  -a, --all               unignore: clear the entire ignore set
 EOF
 }
-
-IGNORES=()  # paths to ignore (install-time, persisted for update)
 
 # ---- args ------------------------------------------------------------------
 
 CMD=""
 DRY_RUN=0
 SKIP_SUBMODULES=0
+ALL=0
+PATHS=()
+
+bad_usage() { printf '%serror:%s %s\n\n' "$RED" "$RST" "$*" >&2; usage >&2; exit 2; }
+
+case "${1:-}" in
+    install|uninstall|ignore|unignore) CMD="$1"; shift ;;
+    help|-h|--help)                    usage; exit 0 ;;
+    "")                                usage >&2; exit 2 ;;
+    *)                                 bad_usage "unknown command: $1" ;;
+esac
 
 for arg in "$@"; do
     case "$arg" in
-        install|update|uninstall) CMD="$arg" ;;
-        help|-h|--help)           usage; exit 0 ;;
-        -n|--dry-run)             DRY_RUN=1 ;;
-        -S|--skip-modules)        SKIP_SUBMODULES=1 ;;
-        -I|--ignore)              WAIT_IGNORE=1 ;;
+        -n|--dry-run)      DRY_RUN=1 ;;
+        -S|--skip-modules) SKIP_SUBMODULES=1 ;;
+        -a|--all)          ALL=1 ;;
+        -*)                bad_usage "unknown option: $arg" ;;
         *)
-            if [ "${WAIT_IGNORE:-0}" -eq 1 ]; then
-                case "$arg" in
-                    "~")   IGNORES+=("$HOME") ;;
-                    "~/"*) IGNORES+=("$HOME/${arg#"~/"}") ;;
-                    *)     IGNORES+=("${arg%/}") ;;
-                esac
-                WAIT_IGNORE=0
-            else
-                printf '%serror:%s unknown arg: %s\n\n' "$RED" "$RST" "$arg" >&2
-                usage >&2
-                exit 2
-            fi
+            case "$CMD" in
+                ignore|unignore) ;;
+                *) bad_usage "$CMD takes no path arguments" ;;
+            esac
+            case "$arg" in
+                "~")   arg="$HOME" ;;
+                "~/"*) arg="$HOME/${arg#"~/"}" ;;
+                /*)    ;;
+                *)     arg="$PWD/$arg" ;;
+            esac
+            PATHS+=("${arg%/}")
             ;;
     esac
 done
 
-if [ "${WAIT_IGNORE:-0}" -eq 1 ]; then
-    warn "-I given without a path; ignoring"
+if [ "$ALL" -eq 1 ] && [ "$CMD" != "unignore" ]; then
+    bad_usage "--all only applies to unignore"
 fi
-
-if [ -z "$CMD" ]; then usage >&2; exit 2; fi
 
 # ---- locate shed -----------------------------------------------------------
 
@@ -110,30 +129,26 @@ unset _shed_src _shed_link
 SHED_OS="$(bash "$SHED_ROOT/bin/whatsmyos" 2>/dev/null || echo unknown)"
 STAMP="$(date +%Y%m%d%H%M%S)"
 MANIFEST="${XDG_STATE_HOME:-$HOME/.local/state}/shed/manifest"
-IGNORE="${XDG_STATE_HOME:-$HOME/.local/state}/shed/ignore"
+IGNORE="${XDG_CONFIG_HOME:-$HOME/.config}/shed/ignore"
 
 run() { if [ "$DRY_RUN" -eq 1 ]; then printf '%s  %s[dry-run]%s %s\n' "$IND" "$DIM" "$RST" "$*"; else "$@"; fi; }
 
-# ---- manifest --------------------------------------------------------------
+# ---- ignore set -------------------------------------------------------------
 #
-# each line is "<dst>\t<srcrel>" where srcrel is the source path relative to the
-# shed root (e.g. dot/.bashrc). srcrel lets us recognize a link as ours even
-# after the shed directory has moved, since the tail of its target still matches.
+# one path per line in $IGNORE. throughout, ${arr[@]+"${arr[@]}"} guards
+# expansions: bash 3.2 treats an empty array as unset under set -u.
 
-MANIFEST_LINES=()   # collected as "<dst>\t<srcrel>" during a link pass
-
-# ---- ignore helpers ---------------------------------------------------------
+IGNORES=()
 
 # returns 0 if path or any child is in IGNORES
 is_ignored() {
     local p="${1%/}" i
-    for i in "${IGNORES[@]}"; do
+    for i in ${IGNORES[@]+"${IGNORES[@]}"}; do
         case "$p" in "$i"|"$i"/*) return 0 ;; esac
     done
     return 1
 }
 
-# populate IGNORES from state file (if present)
 read_ignore() {
     IGNORES=()
     [ -e "$IGNORE" ] || return 1
@@ -149,16 +164,29 @@ read_ignore() {
     return 0
 }
 
-# persist IGNORES (install resets it)
+# persist IGNORES; an empty set means no file at all
 write_ignore() {
     [ "$DRY_RUN" -eq 1 ] && return 0
     local dir; dir="$(dirname "$IGNORE")"
-    if ! mkdir -p "$dir" 2>/dev/null; then
-        warn "could not create state dir $dir (skipping ignore file)"
+    if [ "${#IGNORES[@]}" -eq 0 ]; then
+        rm -f "$IGNORE" 2>/dev/null || true
+        rmdir "$dir" 2>/dev/null || true
         return 0
     fi
-    printf '%s\n' "${IGNORES[@]}" > "$IGNORE" 2>/dev/null || warn "could not write ignore: $IGNORE"
+    if ! mkdir -p "$dir" 2>/dev/null; then
+        warn "could not create config dir $dir (ignore set not saved)"
+        return 0
+    fi
+    printf '%s\n' "${IGNORES[@]}" > "$IGNORE" 2>/dev/null || warn "could not write ignore file: $IGNORE"
 }
+
+# ---- manifest --------------------------------------------------------------
+#
+# each line is "<dst>\t<srcrel>" where srcrel is the source path relative to the
+# shed root (e.g. dot/.bashrc). srcrel lets us recognize a link as ours even
+# after the shed directory has moved, since the tail of its target still matches.
+
+MANIFEST_LINES=()   # collected as "<dst>\t<srcrel>" during a link pass
 
 record_link() { MANIFEST_LINES+=("$1"$'\t'"$2"); }
 
@@ -198,7 +226,7 @@ write_manifest() {
     local dir; dir="$(dirname "$MANIFEST")"
     if ! mkdir -p "$dir" 2>/dev/null; then
         warn "could not create state dir $dir (skipping manifest)"
-        warn "(uninstall/update won't be able to find these links later)"
+        warn "(uninstall won't be able to find these links later)"
         return 0
     fi
     local content=""
@@ -249,7 +277,7 @@ link_tree() {
         rel="${f#"$root"/}"
         local dst="$HOME/$rel"
         if is_ignored "$dst"; then
-            continue  # skip if destination is under ignored path(s)
+            continue
         fi
         link_one "$f" "$dst"
     done < <(find "$root" -type f -print0)
@@ -319,6 +347,11 @@ preamble() {
     printf '%senvironment%s\n' "$BLD$CYN" "$RST"
     field "os"   "$SHED_OS"
     field "shed" "$SHED_ROOT"
+    local i label="ignore"
+    for i in ${IGNORES[@]+"${IGNORES[@]}"}; do
+        field "$label" "$(tilde "$i")"
+        label=""
+    done
     if [ "$DRY_RUN" -eq 1 ]; then printf '  %s(dry run, nothing will change)%s\n' "$DIM" "$RST"; fi
 }
 
@@ -331,63 +364,162 @@ epilogue() {
 # ---- commands --------------------------------------------------------------
 
 cmd_install() {
+    read_ignore || true
+
     preamble
     show_submodules
     if [ "$SKIP_SUBMODULES" -eq 0 ]; then
         init_submodules
     fi
 
-    # persist ignore list (install resets it)
-    write_ignore
-
-    hdr "linking"
-    link_all
-    write_manifest
-    secure_ssh
-
-    epilogue "installed $((${#MANIFEST_LINES[@]})) dotfile(s)"
-}
-
-cmd_update() {
-    preamble
-    read_ignore || true
-
-    # snapshot the previous manifest so we can prune links dropped from shed
+    # previous links, to converge against below
     read_manifest || true
-    local -a old_dst=(${MF_DST[@]+"${MF_DST[@]}"}) old_rel=(${MF_REL[@]+"${MF_REL[@]}"})
 
     # relink the current tree; link_one repoints any stale (moved) symlinks
-    hdr "relinking"
+    hdr "linking"
     link_all
 
-    # prune: anything in the old manifest that no longer exists in shed
+    # prune tracked links that shouldn't exist anymore: destination newly
+    # ignored (evict -- that territory is the user's) or source left the shed
+    # tree. only ever touches links that are ours.
     local new_dsts=$'\n' line
     for line in ${MANIFEST_LINES[@]+"${MANIFEST_LINES[@]}"}; do
         new_dsts="$new_dsts${line%%$'\t'*}"$'\n'
     done
-    if [ "${#old_dst[@]}" -gt 0 ]; then
-        hdr "pruning removed dotfiles"
-        local i pruned=0
-        for ((i = 0; i < ${#old_dst[@]}; i++)); do
-            # never prune anything under ignored paths
-            if is_ignored "${old_dst[$i]}"; then continue; fi
-            case "$new_dsts" in *$'\n'"${old_dst[$i]}"$'\n'*) continue ;; esac
-            if is_our_link "${old_dst[$i]}" "${old_rel[$i]}"; then
-                act "$RED" "remove:" "${old_dst[$i]#$HOME/}"
-                run rm -f "${old_dst[$i]}"
-                pruned=$((pruned + 1))
-            fi
-        done
-        [ "$pruned" -eq 0 ] && printf '  %s(nothing to prune)%s\n' "$DIM" "$RST"
-    fi
+    local i b pruned=0
+    for ((i = 0; i < ${#MF_DST[@]}; i++)); do
+        case "$new_dsts" in *$'\n'"${MF_DST[$i]}"$'\n'*) continue ;; esac
+        is_our_link "${MF_DST[$i]}" "${MF_REL[$i]}" || continue
+        [ "$pruned" -gt 0 ] || hdr "pruning"
+        pruned=$((pruned + 1))
+        if is_ignored "${MF_DST[$i]}"; then
+            act "$YLW" "evict:" "${MF_DST[$i]#$HOME/} (now ignored)"
+            for b in "${MF_DST[$i]}".bak.*; do
+                [ -e "$b" ] &&
+                    printf '            %sbackup left in place: %s%s\n' "$DIM" "${b#$HOME/}" "$RST"
+            done
+        else
+            act "$RED" "remove:" "${MF_DST[$i]#$HOME/} (no longer in shed)"
+        fi
+        run rm -f "${MF_DST[$i]}"
+    done
 
     write_manifest
     secure_ssh
 
-    epilogue "linked $((${#MANIFEST_LINES[@]})) dotfile(s) to $SHED_ROOT"
+    local extra=""
+    [ "$pruned" -gt 0 ] && extra=", removed $pruned old link(s)"
+    epilogue "installed ${#MANIFEST_LINES[@]} dotfile(s)$extra"
+}
+
+cmd_ignore() {
+    read_ignore || true
+
+    if [ "${#PATHS[@]}" -eq 0 ]; then
+        if [ "${#IGNORES[@]}" -eq 0 ]; then
+            say "nothing is ignored."
+        else
+            local i
+            for i in "${IGNORES[@]}"; do printf '  %s\n' "$(tilde "$i")"; done
+        fi
+        return 0
+    fi
+
+    local p added=0
+    for p in "${PATHS[@]}"; do
+        if is_ignored "$p"; then
+            act "$DIM" "kept:" "$(tilde "$p") (already ignored)"
+        else
+            IGNORES+=("$p")
+            act "$YLW" "ignore:" "$(tilde "$p")"
+            added=$((added + 1))
+        fi
+    done
+    write_ignore
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf '%s(dry run, ignore set unchanged)%s\n' "$DIM" "$RST"
+    elif [ "$added" -gt 0 ]; then
+        say "run ${BLD}shed install${RST} to apply (evicts shed links under ignored paths)"
+    fi
+}
+
+cmd_unignore() {
+    read_ignore || true
+
+    if [ "${#IGNORES[@]}" -eq 0 ]; then
+        say "nothing is ignored."
+        return 0
+    fi
+
+    local -a drop=()
+    local p i
+    if [ "$ALL" -eq 1 ]; then
+        drop=("${IGNORES[@]}")
+    elif [ "${#PATHS[@]}" -gt 0 ]; then
+        local found
+        for p in "${PATHS[@]}"; do
+            found=0
+            for i in "${IGNORES[@]}"; do
+                [ "$i" = "$p" ] && { drop+=("$p"); found=1; break; }
+            done
+            if [ "$found" -eq 0 ]; then
+                if is_ignored "$p"; then
+                    warn "$(tilde "$p") is covered by a parent entry; unignore that instead"
+                else
+                    warn "$(tilde "$p") is not ignored"
+                fi
+            fi
+        done
+    else
+        [ -t 0 ] || die "no terminal to pick from; pass paths or --all"
+        for ((i = 0; i < ${#IGNORES[@]}; i++)); do
+            printf '  %s%2d)%s %s\n' "$DIM" "$((i + 1))" "$RST" "$(tilde "${IGNORES[$i]}")"
+        done
+        printf 'unignore which? [numbers, %sa%sll, enter to cancel] ' "$BLD" "$RST"
+        local reply n
+        read -r reply || reply=""
+        case "$reply" in
+            "")    say "cancelled."; return 0 ;;
+            a|all) drop=("${IGNORES[@]}") ;;
+            *)
+                for n in ${reply//,/ }; do
+                    case "$n" in *[!0-9]*|"") die "invalid selection: $n" ;; esac
+                    if [ "$n" -lt 1 ] || [ "$n" -gt "${#IGNORES[@]}" ]; then
+                        die "out of range: $n"
+                    fi
+                    drop+=("${IGNORES[$((n - 1))]}")
+                done
+                ;;
+        esac
+    fi
+
+    [ "${#drop[@]}" -gt 0 ] || return 0
+
+    local -a keep=()
+    local d hit removed=0
+    for i in "${IGNORES[@]}"; do
+        hit=0
+        for d in "${drop[@]}"; do [ "$d" = "$i" ] && { hit=1; break; }; done
+        if [ "$hit" -eq 1 ]; then
+            act "$GRN" "unignore:" "$(tilde "$i")"
+            removed=$((removed + 1))
+        else
+            keep+=("$i")
+        fi
+    done
+    IGNORES=(${keep[@]+"${keep[@]}"})
+    write_ignore
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf '%s(dry run, ignore set unchanged)%s\n' "$DIM" "$RST"
+    elif [ "$removed" -gt 0 ]; then
+        say "run ${BLD}shed install${RST} to link into these paths again"
+    fi
 }
 
 cmd_uninstall() {
+    read_ignore || true
     preamble
 
     local rc=0
@@ -438,6 +570,7 @@ cmd_uninstall() {
 
 case "$CMD" in
     install)   cmd_install ;;
-    update)    cmd_update ;;
+    ignore)    cmd_ignore ;;
+    unignore)  cmd_unignore ;;
     uninstall) cmd_uninstall ;;
 esac

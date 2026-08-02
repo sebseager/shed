@@ -43,3 +43,29 @@ extract() {
 serve() {
     python3 -m http.server "${1:-8000}"
 }
+
+# free: human-readable on linux (procps); macos has no free(1), so build an
+# approximation from vm_stat (used = active + wired + compressor pages, the
+# same notion activity monitor uses)
+if command -v free >/dev/null 2>&1; then
+    free() {
+        command free -h "$@"
+    }
+elif command -v vm_stat >/dev/null 2>&1; then
+    free() {
+        command vm_stat | command awk \
+            -v total="$(command sysctl -n hw.memsize)" \
+            -v pagesz="$(command sysctl -n hw.pagesize)" '
+            { gsub(/\./, "", $NF) }
+            /^Pages active/                 { used += $NF }
+            /^Pages wired down/             { used += $NF }
+            /^Pages occupied by compressor/ { used += $NF }
+            END {
+                gib = 1024 * 1024 * 1024
+                used *= pagesz
+                printf "%-5s %9s %9s %9s\n", "", "total", "used", "avail"
+                printf "%-5s %8.1fG %8.1fG %8.1fG\n", "Mem:",
+                    total / gib, used / gib, (total - used) / gib
+            }'
+    }
+fi

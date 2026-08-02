@@ -15,13 +15,28 @@ bash bin/shed install
 Once installed, `shed` is on your `PATH`:
 
 ```bash
-shed install     # symlink dotfiles into $HOME (idempotent)
-shed update      # repoint symlinks after moving the shed directory, and
-                 # prune links for dotfiles no longer tracked
+shed install     # symlink dotfiles into $HOME (idempotent). re-run any time
+                 # to sync: links new files, repoints links after the shed
+                 # directory moves, prunes links for dotfiles removed from
+                 # the tree
+shed ignore      # list ignored paths; `shed ignore <path>...` adds paths
+shed unignore    # pick ignored paths to remove (or pass paths, or --all)
 shed uninstall   # remove every symlink shed created (backups left in place)
 ```
 
-Pass `-n` / `--dry-run` to any command to preview changes without touching
-anything. Every link is recorded in a manifest under
-`${XDG_STATE_HOME:-~/.local/state}/shed/` so `update` and `uninstall` can find
-them again even after the shed directory has moved.
+Declare paths as yours with `shed ignore`:
+
+```bash
+shed ignore ~/.ssh ~/.bashrc
+```
+
+Ignored paths are user territory: shed never links into them or their descendants,
+and if a path you ignore already holds shed links, the next `shed install`
+evicts them (any backup of your original file stays put). `ignore` and `unignore`
+only edit the persisted set. Only running `shed install` actually applies things.
+
+Pass `-n` / `--dry-run` to preview changes without touching anything. Every
+link is recorded in a manifest under `${XDG_STATE_HOME:-~/.local/state}/shed/`
+so a later `install` or `uninstall` can find it again even after the shed
+directory has moved. The ignore set lives in
+`${XDG_CONFIG_HOME:-~/.config}/shed/ignore` and survives an uninstall.

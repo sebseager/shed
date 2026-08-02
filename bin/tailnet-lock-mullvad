@@ -9,11 +9,15 @@ set -euo pipefail
 # colors
 ##
 
-BLD=$(tput bold)
-RST=$(tput sgr0)
-RED=$(tput setaf 1)
-GRN=$(tput setaf 2)
-YLW=$(tput setaf 3)
+if [ -t 1 ] && command -v tput >/dev/null 2>&1 && [ -n "${TERM:-}" ]; then
+  BLD=$(tput bold)
+  RST=$(tput sgr0)
+  RED=$(tput setaf 1)
+  GRN=$(tput setaf 2)
+  YLW=$(tput setaf 3)
+else
+  BLD=; RST=; RED=; GRN=; YLW=
+fi
 
 ##
 # helpers
@@ -44,9 +48,7 @@ HEREDOC
 filter_mullvad_nodes() {
   local status_json="$1"
   local result
-  result=$(echo "$status_json" | jq -r '.FilteredPeers[] | select(.Name | endswith(".mullvad.ts.net.")) | "\(.Name)\t\(.NodeKey)"' 2>&1)
-  local jq_exit=$?
-  if [[ $jq_exit -ne 0 ]]; then
+  if ! result=$(echo "$status_json" | jq -r '.FilteredPeers[] | select(.Name | endswith(".mullvad.ts.net.")) | "\(.Name)\t\(.NodeKey)"' 2>&1); then
     echo "${RED}error:${RST} $result" >&2
     return 1
   fi
@@ -115,10 +117,11 @@ main() {
   local count=0
   local errors=0
   while IFS=$'\t' read -r node_name node_key; do
+    # not ((count++)): that returns 1 when count is 0, tripping set -e
     if sign_node "$node_key" "$node_name" "$dry_run"; then
-      ((count++))
+      count=$((count + 1))
     else
-      ((errors++))
+      errors=$((errors + 1))
     fi
     sleep 0.1  # avoid rate limits
   done <<< "$mullvad_nodes"
