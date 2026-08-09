@@ -63,7 +63,12 @@ install_completion() {
     if [[ ! -f "$target" || "$(command -v "$name")" -nt "$target" ]]; then
         # many generators include a '#compdef <name>' header, add one if not
         local tmp; tmp="$(mktemp)"
-        "${(z)generator}" >| "$tmp"
+        # a failed generator must not install its partial output as the
+        # completion file, or it would be cached until the binary's mtime changes
+        if ! "${(z)generator}" >| "$tmp" 2>/dev/null; then
+            rm -f -- "$tmp"
+            return 0
+        fi
         if ! grep -qE '^#\s*compdef\s+' "$tmp"; then
             printf '#compdef %s\n' "$name" | cat - "$tmp" >| "$target"
             rm -f -- "$tmp"
@@ -112,6 +117,7 @@ ZSH_COMPINIT_TTL=24
     # (re)init if missing or older than ZSH_COMPINIT_TTL hours
     if [[ ! -e $ZSH_COMPDUMP || -n "$ZSH_COMPDUMP"(#qN.mh+${ZSH_COMPINIT_TTL}) ]]; then
         if [[ ${ZSH_DISABLE_COMPFIX} != true ]]; then
+            local insecure
             if insecure=$(compaudit 2>/dev/null); [[ -n $insecure ]]; then
                 print -u2 -- "[zsh] Ignoring insecure completion directories:"
                 print -u2 -- "$insecure"
@@ -123,11 +129,11 @@ ZSH_COMPINIT_TTL=24
         else
             compinit -i -d "$ZSH_COMPDUMP"  # ZSH_DISABLE_COMPFIX skips compaudit
         fi
-        # compile to bytecode (.zwc) in background for tiny speed boost
-        (command -v zrecompile >/dev/null && zrecompile -q -p "$ZSH_COMPDUMP" 2>/dev/null) &
+        # compile to bytecode (.zwc) in background for tiny speed boost.
+        # backgrounded inside subshell so it never prints [1] 12345" / "done" at prompt.
+        ( (command -v zrecompile >/dev/null && zrecompile -q -p "$ZSH_COMPDUMP" 2>/dev/null) & )
     else
         compinit -C -d "$ZSH_COMPDUMP"  # load existing dump quickly
-        touch "$ZSH_COMPDUMP"           # nudge mtime to avoid herd rebuilds later
     fi
 }
 

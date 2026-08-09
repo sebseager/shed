@@ -13,8 +13,10 @@ export LESS='-FRX'
 # true color, matches what interactive terminals advertise
 export COLORTERM=truecolor
 
-# let gpg/pinentry find the terminal when signing
-export GPG_TTY="$(tty)"
+# let gpg/pinentry find the terminal when signing, iff stdin is a terminal
+if tty -s 2>/dev/null; then
+    export GPG_TTY="$(tty)"
+fi
 
 # colored gcc/g++ diagnostics
 export GCC_COLORS='error=01;31:warning=01;35:note=01;36:caret=01;32:locus=01:quote=01'
