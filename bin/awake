@@ -1,0 +1,283 @@
+#!/usr/bin/env bash
+#
+# awake - keeps the machine from sleeping while something long-running runs
+#
+
+set -euo pipefail
+
+##
+# colors
+##
+
+if [ -t 1 ] && command -v tput >/dev/null 2>&1 && [ -n "${TERM:-}" ]; then
+  BLD=$(tput bold)
+  RST=$(tput sgr0)
+  RED=$(tput setaf 1)
+  GRN=$(tput setaf 2)
+  YLW=$(tput setaf 3)
+  ITL=$(tput sitm)
+else
+  BLD=; RST=; RED=; GRN=; YLW=; ITL=
+fi
+
+##
+# helpers
+##
+
+usage() {
+  local me
+  me=$(basename -- "$0")
+  cat << HEREDOC
+${BLD}usage${RST}: $me [options] [duration] [-- command [args...]]
+
+${BLD}description${RST}:
+  Holds the machine awake so a long-running job doesn't get suspended (and
+  doesn't lose its network) while you're away. With no duration it holds
+  until you ctrl-c it; with a command it holds until the command exits.
+
+  By default only the system is kept awake - the display is still free to
+  blank, dim, or hand off to the screensaver. Pass -d to keep the screen lit
+  as well.
+
+${BLD}positional args${RST}:
+  duration       how long to stay awake: 90, 45s, 20m, 2h, 1h30m
+                 (no units assumes seconds). default: indefinite
+
+${BLD}optional args${RST}:
+  -h, --help     show this help message and exit
+  -d, --display  also keep the display on (blocks blanking + screensaver)
+  -t, --time     same as the positional duration
+  -q, --quiet    don't print status
+  -- command     run command with the machine held awake, then release
+
+${BLD}examples${RST}:
+  $me                      # stay awake until ctrl-c, screen may blank
+  $me 2h10m5s -d           # stay awake and lit for 2 hours 10 minutes and 5 seconds
+  $me -- rsync -a src dst  # stay awake for exactly as long as rsync runs
+
+${BLD}notes${RST}:
+  macos    caffeinate(8)
+  linux    systemd-inhibit(1), --what=sleep (plus idle with -d)
+  windows  SetThreadExecutionState via powershell
+HEREDOC
+}
+
+# turns a duration spec (2h, 1h30m, 90, 45s) into seconds on stdout
+parse_duration() {
+  local rest num unit total=0
+  rest=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  [[ -n "$rest" ]] || return 1
+  while [[ -n "$rest" ]]; do
+    [[ "$rest" =~ ^([0-9]+)([smhd]?)(.*)$ ]] || return 1
+    num="${BASH_REMATCH[1]}"
+    unit="${BASH_REMATCH[2]}"
+    rest="${BASH_REMATCH[3]}"
+    case "$unit" in
+      ""|s) total=$((total + num)) ;;
+      m) total=$((total + num * 60)) ;;
+      h) total=$((total + num * 3600)) ;;
+      d) total=$((total + num * 86400)) ;;
+    esac
+  done
+  [[ "$total" -gt 0 ]] || return 1
+  printf '%s' "$total"
+}
+
+# seconds -> 1h30m
+fmt_duration() {
+  local s="$1" out="" d h m
+  d=$((s / 86400)); s=$((s % 86400))
+  h=$((s / 3600)); s=$((s % 3600))
+  m=$((s / 60)); s=$((s % 60))
+  [[ "$d" -gt 0 ]] && out="${out}${d}d"
+  [[ "$h" -gt 0 ]] && out="${out}${h}h"
+  [[ "$m" -gt 0 ]] && out="${out}${m}m"
+  [[ "$s" -gt 0 ]] && out="${out}${s}s"
+  printf '%s' "$out"
+}
+
+# wall clock time $1 seconds from now, or nothing if date won't cooperate
+end_clock() {
+  date -d "+$1 seconds" +'%H:%M' 2>/dev/null \
+    || date -v"+${1}S" +'%H:%M' 2>/dev/null \
+    || true
+}
+
+##
+# per-os hold commands
+##
+
+# fills hold_cmd with a command that blocks for $secs (0 = forever) while
+# holding the wake assertions
+build_hold_cmd() {
+  local secs="$1" display="$2" os ps_script flags
+
+  # whatsmyos exits nonzero on an os it doesn't recognize; we want to say so
+  # ourselves rather than let set -e end things quietly
+  os=$(whatsmyos) || os="unknown"
+  case "$os" in
+    macos)
+      # -i idle sleep, -m disk sleep, -s system sleep (only honored on AC)
+      hold_cmd=(caffeinate -i -m -s)
+      [[ "$display" == "true" ]] && hold_cmd+=(-d)
+      [[ "$secs" -gt 0 ]] && hold_cmd+=(-t "$secs")
+      ;;
+    linux)
+      if ! command -v systemd-inhibit >/dev/null 2>&1; then
+        echo "${RED}error${RST}: systemd-inhibit not found; don't know how to" \
+          "hold this machine awake" >&2
+        exit 1
+      fi
+      local what="sleep"
+      # idle also covers the blank/lock the desktop does on its own
+      [[ "$display" == "true" ]] && what="sleep:idle"
+      hold_cmd=(
+        systemd-inhibit
+        --what="$what"
+        --who="awake"
+        --why="holding the machine awake"
+        --mode=block
+        --
+      )
+      if [[ "$secs" -gt 0 ]]; then
+        hold_cmd+=(sleep "$secs")
+      else
+        hold_cmd+=(sleep infinity)
+      fi
+      ;;
+    windows)
+      if ! command -v powershell.exe >/dev/null 2>&1; then
+        echo "${RED}error${RST}: powershell.exe not found" >&2
+        exit 1
+      fi
+      # ES_CONTINUOUS | ES_SYSTEM_REQUIRED [| ES_DISPLAY_REQUIRED]
+      flags="0x80000001"
+      [[ "$display" == "true" ]] && flags="0x80000003"
+      ps_script=$(cat << 'PSEOF'
+$sig = '[DllImport("kernel32.dll", SetLastError=true)] public static extern uint SetThreadExecutionState(uint f);'
+$api = Add-Type -MemberDefinition $sig -Name Power -Namespace Awake -PassThru
+[void]$api::SetThreadExecutionState([uint32]__FLAGS__)
+try {
+  if (__SECS__ -gt 0) { Start-Sleep -Seconds __SECS__ }
+  else { while ($true) { Start-Sleep -Seconds 3600 } }
+} finally {
+  [void]$api::SetThreadExecutionState([uint32]0x80000000)
+}
+PSEOF
+      )
+      ps_script="${ps_script//__FLAGS__/$flags}"
+      ps_script="${ps_script//__SECS__/$secs}"
+      hold_cmd=(powershell.exe -NoProfile -NonInteractive -Command "$ps_script")
+      ;;
+    *)
+      echo "${RED}error${RST}: no way to hold '$os' awake" >&2
+      exit 1
+      ;;
+  esac
+  return 0
+}
+
+##
+# main
+##
+
+hold_cmd=()
+hold_pid=""
+
+release() {
+  local pid="$hold_pid"
+  [[ -n "$pid" ]] || return 0
+  hold_pid=""
+  # a kill sent in the moment between fork and exec gets dropped on the floor,
+  # so confirm the holder is actually gone rather than assuming it
+  for _ in 1 2 3; do
+    kill "$pid" 2>/dev/null || break
+    sleep 0.1
+    kill -0 "$pid" 2>/dev/null || break
+  done
+  wait "$pid" 2>/dev/null || true
+}
+
+main() {
+  local display=false quiet=false spec="" secs=0
+  local positional=() cmd=()
+
+  # parse arguments
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      -h|--help) usage; exit 0 ;;
+      -d|--display) display=true; shift ;;
+      -q|--quiet) quiet=true; shift ;;
+      -t|--time)
+        if [[ $# -lt 2 ]]; then
+          echo "${RED}error${RST}: $1 needs a duration" >&2; exit 1
+        fi
+        spec="$2"; shift; shift ;;
+      --) shift; cmd=("$@"); break ;;
+      -*) echo "unknown option '$1'" >&2; usage >&2; exit 1 ;;
+      *) positional+=("$1"); shift ;;
+    esac
+  done
+
+  if [[ ${#positional[@]} -gt 1 ]]; then
+    echo "${RED}error${RST}: too many arguments" >&2; usage >&2; exit 1
+  fi
+  [[ ${#positional[@]} -eq 1 ]] && spec="${positional[0]}"
+
+  if [[ -n "$spec" ]]; then
+    if ! secs=$(parse_duration "$spec"); then
+      echo "${RED}error${RST}: can't read '$spec' as a duration" >&2
+      exit 1
+    fi
+  fi
+
+  # a command gets held awake for exactly as long as it runs
+  if [[ ${#cmd[@]} -gt 0 ]]; then
+    if [[ "$secs" -gt 0 ]]; then
+      echo "${YLW}warning${RST}: ignoring duration; holding until the" \
+        "command exits" >&2
+      secs=0
+    fi
+  fi
+
+  build_hold_cmd "$secs" "$display"
+
+  # status line
+  if [[ "$quiet" != "true" ]]; then
+    local what="system awake" until=""
+    [[ "$display" == "true" ]] && what="system + display awake"
+    if [[ ${#cmd[@]} -gt 0 ]]; then
+      until="while ${cmd[0]} runs"
+    elif [[ "$secs" -gt 0 ]]; then
+      until="for $(fmt_duration "$secs")"
+      local clock
+      clock=$(end_clock "$secs")
+      [[ -n "$clock" ]] && until="$until (until $clock)"
+    else
+      until="until ctrl-c"
+    fi
+    printf "%s: %s %s\n" "${BLD}awake${RST}" "${GRN}${what}${RST}" \
+      "${ITL}${until}${RST}"
+  fi
+
+  trap release EXIT
+  trap 'release; exit 130' INT TERM
+
+  "${hold_cmd[@]}" &
+  hold_pid=$!
+
+  local status=0
+  if [[ ${#cmd[@]} -gt 0 ]]; then
+    "${cmd[@]}" || status=$?
+    release
+  else
+    # the holder is backgrounded so ctrl-c lands here and not on it (bash
+    # ignores SIGINT in async children); wait returns >128 when a trap fires
+    wait "$hold_pid" 2>/dev/null || true
+    hold_pid=""
+  fi
+
+  exit "$status"
+}
+
+main "$@"
