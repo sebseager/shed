@@ -1,0 +1,8 @@
+Windows Registry Editor Version 5.00
+
+; this script enables win32 long paths (>260 chars) on windows
+; requires a reboot (or sign out/in) to take effect
+; to undo, set the value back to dword:00000000
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem]
+"LongPathsEnabled"=dword:00000001
