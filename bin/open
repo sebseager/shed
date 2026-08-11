@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+#
+# open - open files/directories in the platform's default GUI application
+# (the file manager, for directories)
+#
+# on macos this shadows /usr/bin/open and delegates straight to it, so all of
+# the real open's flags and behaviors are preserved. elsewhere it routes to
+# the platform opener: explorer.exe (windows/git bash, wsl) or xdg-open.
+#
+
+set -euo pipefail
+
+case "$(uname -s)" in
+    Darwin*) exec /usr/bin/open "$@" ;;
+    CYGWIN*|MINGW*|MSYS*) os=windows ;;
+    Linux*)
+        # wsl identifies itself in the kernel release string
+        if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
+            os=wsl
+        else
+            os=linux
+        fi
+        ;;
+    *) os=linux ;;   # bsds and friends: try xdg-open
+esac
+
+case "${1:-}" in
+    -h|--help)
+        cat <<EOF
+usage: $(basename -- "$0") [path ...]
+
+opens each path (default: the current directory) in the platform's default
+GUI application; directories open in the file manager. on macos all
+arguments are passed through to /usr/bin/open unchanged.
+EOF
+        exit 0
+        ;;
+esac
+
+[ $# -gt 0 ] || set -- .
+
+if [ "$os" = linux ] && ! command -v xdg-open >/dev/null 2>&1; then
+    echo "open: xdg-open not found (install xdg-utils)" >&2
+    exit 1
+fi
+if [ "$os" = wsl ] && ! command -v explorer.exe >/dev/null 2>&1; then
+    echo "open: explorer.exe not on PATH (windows interop disabled?)" >&2
+    exit 1
+fi
+
+rc=0
+for target in "$@"; do
+    if [ ! -e "$target" ]; then
+        printf 'open: %s: no such file or directory\n' "$target" >&2
+        rc=1
+        continue
+    fi
+    case "$os" in
+        # explorer.exe wants windows-style paths and exits 1 even on success
+        windows) explorer.exe "$(cygpath -w "$target")" || true ;;
+        wsl)     explorer.exe "$(wslpath -w "$target")" || true ;;
+        linux)   xdg-open "$target" ;;
+    esac
+done
+exit "$rc"
