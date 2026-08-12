@@ -142,8 +142,11 @@ ZSH_COMPINIT_TTL=24
 
 # git info at the prompt; add-zsh-hook lets us register precmd non-destructively
 zstyle ':vcs_info:*' enable git
-zstyle ':vcs_info:git:*' formats $'\ue0a0 %b'            # current branch
-zstyle ':vcs_info:git:*' actionformats $'\ue0a0 %b (%a)' # e.g. rebase, merge
+# U+E0A0 (powerline branch glyph) as raw utf-8 bytes, not $'\u...': the \u
+# form converts via the locale and can degrade to literal text (see the
+# matching note in prompt.bash)
+zstyle ':vcs_info:git:*' formats $'\xee\x82\xa0 %b'            # current branch
+zstyle ':vcs_info:git:*' actionformats $'\xee\x82\xa0 %b (%a)' # e.g. rebase, merge
 
 # prompt_subst lets ${vcs_info_msg_0_} expand each time the prompt renders
 setopt prompt_subst

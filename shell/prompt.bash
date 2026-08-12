@@ -28,7 +28,10 @@ _shed_prompt_command() {
     local branch
     branch=$(git branch --show-current 2>/dev/null)
     if [ -n "$branch" ]; then
-        printf -v _shed_git_branch '  \ue0a0 %s' "$branch"
+        # U+E0A0 (powerline branch glyph) as raw utf-8 bytes: printf's \u
+        # converts via the locale and degrades to literal "\ue0a0" where that
+        # fails (msys2 bash without a utf-8 LANG); \u also needs bash >= 4.2
+        printf -v _shed_git_branch '  \xee\x82\xa0 %s' "$branch"
     else
         _shed_git_branch=''
     fi
