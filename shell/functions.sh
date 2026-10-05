@@ -5,6 +5,12 @@
 # IMPORTANT: prefix ANYTHING shadowed by an alias with `command` to ignore
 #            the alias and keep behavior stable within functions.
 
+# jump back to prev dir but keep both on pushd stack
+back() {
+    builtin pushd > /dev/null
+    dirs -v
+}
+
 # make a directory (and parents) then cd into it
 mkcd() {
     command mkdir -p -- "$1" && cd -- "$1" || return
