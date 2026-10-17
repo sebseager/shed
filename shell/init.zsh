@@ -32,6 +32,7 @@ autoload -Uz zrecompile
 ## zmodules
 
 zmodload zsh/datetime  # for EPOCHREALTIME
+zmodload zsh/complist  # menuselect/listscroll keymaps for completion
 
 ##
 ## history
