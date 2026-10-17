@@ -47,3 +47,10 @@ esac
 # info line (user@host, cwd, branch), then the prompt char
 PS1='\[\e[94m\]\u@\h\[\e[0m\] \[\e[1;92m\]\w\[\e[0m\]\[\e[93m\]${_shed_git_branch}\[\e[0m\]\n'
 PS1+='${_shed_ps_col}${_shed_ps_code}\$\[\e[0m\] '
+
+# terminal window title: user@host: dir
+case "$TERM" in
+    xterm*|rxvt*|alacritty*|foot*|wezterm*|tmux*|screen*)
+        PS1='\[\e]0;\u@\h: \w\a\]'"$PS1"
+        ;;
+esac
