@@ -1,2 +1,7 @@
 # os
 .DS_Store
+
+# zsh runtime state
+dot/.zsh/.zcompdump*
+dot/.zsh/.zsh_history
+dot/.zsh/completions/
