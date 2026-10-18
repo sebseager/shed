@@ -2,6 +2,12 @@
 # bash/zsh exports
 ##
 
+# fall back to xterm-256color when this host has no terminfo entry for $TERM
+if command -v infocmp >/dev/null 2>&1 && ! infocmp "$TERM" >/dev/null 2>&1 &&
+    infocmp xterm-256color >/dev/null 2>&1; then
+    export TERM=xterm-256color
+fi
+
 # default editor and pager
 export EDITOR=vim
 export VISUAL="$EDITOR"
