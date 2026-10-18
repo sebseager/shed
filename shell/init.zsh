@@ -139,6 +139,63 @@ ZSH_COMPINIT_TTL=24
 }
 
 ##
+## completion styles
+
+# try plain completion, then spelling correction, then approximate matches
+zstyle ':completion:*' completer _expand _complete _correct _approximate
+# exact first, then case-insensitive, then partial words (f.b -> foo.bar)
+zstyle ':completion:*' matcher-list '' 'm:{a-zA-Z}={A-Za-z}' 'r:|[._-]=* r:|=* l:|=*'
+# arrow-key menu whenever there's more than one match
+zstyle ':completion:*' menu select
+# dim position line when a list overflows, e.g. "-- 12/80 --"
+zstyle ':completion:*' select-prompt '%F{8}-- %m --%f'
+zstyle ':completion:*' list-prompt '%F{8}-- %p, tab for more --%f'
+# group matches under a heading per type, colored like ls
+zstyle ':completion:*' group-name ''
+zstyle ':completion:*:descriptions' format '%F{11}-- %d --%f'
+zstyle ':completion:*:corrections'  format '%F{10}-- %d (errors: %e) --%f'
+zstyle ':completion:*:messages'     format '%F{13}-- %d --%f'
+zstyle ':completion:*:warnings'     format '%F{9}-- no matches found --%f'
+# quoted so an unset LS_COLORS gives '' (zsh's default colors rather than none)
+zstyle ':completion:*' list-colors "${(@s.:.)LS_COLORS}"
+zstyle ':completion:*' auto-description 'specify: %d'
+zstyle ':completion:*' verbose true
+zstyle ':completion:*' use-compctl false
+# kill: posix ps -o fields so it works the same with linux procps and bsd/macos ps
+zstyle ':completion:*:kill:*' command 'ps -u $USER -o pid,pcpu,tty,time,args'
+zstyle ':completion:*:*:kill:*:processes' list-colors '=(#b) #([0-9]#)*=0=01;31'
+
+##
+## keybindings
+
+# emacs keymap, else we get vi mode because EDITOR contains "vi"
+bindkey -e
+
+# bind common sequences instead of relying on system zshrc
+bindkey '^[[H'    beginning-of-line   # home (xterm-style)
+bindkey '^[OH'    beginning-of-line   # home (xterm-style, keypad mode)
+bindkey '^[[1~'   beginning-of-line   # home (vt220/tmux/screen)
+bindkey '^[[7~'   beginning-of-line   # home (rxvt)
+bindkey '^[[F'    end-of-line         # end
+bindkey '^[OF'    end-of-line         # end
+bindkey '^[[4~'   end-of-line         # end
+bindkey '^[[8~'   end-of-line         # end
+bindkey '^[[3~'   delete-char         # delete
+bindkey '^[[1;5D' backward-word       # ctrl-left (xterm-style)
+bindkey '^[[1;5C' forward-word        # ctrl-right
+bindkey '^[[3;5~' kill-word           # ctrl-delete
+bindkey '^[Od'    backward-word       # ctrl-left (rxvt)
+bindkey '^[Oc'    forward-word        # ctrl-right
+bindkey '^[[3^'   kill-word           # ctrl-delete
+
+# esc leaves the completion menu/pager, keeping the line as it was
+bindkey -M menuselect '^[' send-break
+bindkey -M listscroll '^[' send-break
+
+# zsh waits KEYTIMEOUT (default 40) to tell multibyte sequences from solo esc
+KEYTIMEOUT=10
+
+##
 ## prompt
 
 # git info at the prompt; add-zsh-hook lets us register precmd non-destructively
@@ -167,6 +224,16 @@ _shed_right_prompt_precmd() {
     RPROMPT=" %F{8}%D{%H:%M:%S}.${ms}%f"
 }
 add-zsh-hook precmd _shed_right_prompt_precmd
+
+# terminal window title: user@host: dir
+case "$TERM" in
+    xterm*|rxvt*|alacritty*|foot*|wezterm*|tmux*|screen*)
+        _shed_title_precmd() {
+            print -Pnr -- $'\e]0;%n@%m: %~\a'
+        }
+        add-zsh-hook precmd _shed_title_precmd
+        ;;
+esac
 
 # the prompt line itself
 PROMPT='%(?.%F{14}.%F{9})%(?..[%?] )%#%f '
