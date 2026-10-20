@@ -225,15 +225,15 @@ _shed_right_prompt_precmd() {
 }
 add-zsh-hook precmd _shed_right_prompt_precmd
 
-# terminal window title: user@host: dir
-case "$TERM" in
-    xterm*|rxvt*|alacritty*|foot*|wezterm*|tmux*|screen*)
-        _shed_title_precmd() {
-            print -Pnr -- $'\e]0;%n@%m: %~\a'
-        }
-        add-zsh-hook precmd _shed_title_precmd
-        ;;
-esac
+# terminal window title: user@host: dir. re-set at every prompt so a title
+# left behind by ssh, vim etc. is replaced as soon as control returns here.
+# every terminal we care about understands OSC 0; only skip dumb ones
+if [[ $TERM != (dumb|linux) ]]; then
+    _shed_title_precmd() {
+        print -Pnr -- $'\e]0;%n@%m: %~\a'
+    }
+    add-zsh-hook precmd _shed_title_precmd
+fi
 
 # the prompt line itself
 PROMPT='%(?.%F{14}.%F{9})%(?..[%?] )%#%f '
