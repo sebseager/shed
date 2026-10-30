@@ -3,7 +3,9 @@
 # etcher - creates a bootable USB drive from a disk image (macOS/linux only)
 #
 # Because this is a bit dangerous, I haven't added a --force option. If you
-# really want to run it a bunch of times, you can pipe it through `yes`.
+# really want to run it a bunch of times, you can pipe it through `yes`:
+#
+#   yes yes | etcher <image> -d <dev>
 #
 
 usage() {
@@ -86,11 +88,13 @@ echo_disks() {
       ;;
     linux)
       # lsblk has no internal/external notion, only hotplug (usb, sd cards, etc.).
-      # -d whole disks only, -e 7 drops loop devices.
+      # -d whole disks only, -e 7,11 drops loop and optical devices.
+      # zram has no fixed major number so it's skipped by name.
       local want=0
       [[ "$1" == "external" ]] && want=1
-      lsblk -dn -e 7 -o PATH,SIZE,HOTPLUG,MODEL | while read -r dev size hotplug model; do
+      lsblk -dn -e 7,11 -o PATH,SIZE,HOTPLUG,MODEL | while read -r dev size hotplug model; do
         [[ "$hotplug" == "$want" ]] || continue
+        [[ "$dev" == /dev/zram* ]] && continue
         printf "  ${MGN}${BLD}%s${RST} (%s) - ${ITL}%s${RST}\n" "$dev" "$size" "${model:-unknown}"
       done
       ;;
@@ -113,12 +117,12 @@ maybe_convert_iso() {
   fi
   printf "%s\n\n" "${CYN}$dmg${RST}"
   answer=""
-  while [[ ! "$answer" =~ ^[yYnN]$ ]]; do
+  while [[ ! "$answer" =~ ^(y|yes|n|no)$ ]]; do
     echo -n ">> is that okay? (y/n) "
     read -r answer
     answer=$(echo "$answer" | tr '[:upper:]' '[:lower:]')
   done
-  if [[ "$answer" =~ ^[yY] ]]; then
+  if [[ "$answer" == y* ]]; then
     echo "converting iso to dmg..."
     if rm -f "$dmg" && hdiutil convert -format UDRW -o "$dmg" "$image"; then
       image="$dmg"
@@ -140,13 +144,24 @@ unmount_disk() {
       diskutil unmountDisk "$1"
       ;;
     linux)
-      local part
-      # the disk itself and each of its partitions, as full paths
-      while IFS= read -r part; do
-        if findmnt -rn -S "$part" > /dev/null; then
-          sudo umount "$part" || return 1
+      local part type
+      # the disk, its partitions, and anything stacked on top, as full paths
+      while read -r part type; do
+        case "$type" in
+          crypt|lvm|raid*|mpath|dm)
+            # we can unmount, but the mapping would still hold the disk open
+            # anyway, so we just refuse rather than write under it
+            echo "${RED}error${RST}: $part ($type) is layered on ${MGN}$1${RST}, close it first" >&2
+            return 1
+            ;;
+        esac
+        if grep -q "^$part " /proc/swaps; then
+          sudo swapoff "$part" || return 1
         fi
-      done < <(lsblk -lnp -o NAME "$1")
+        if findmnt -rn -S "$part" > /dev/null; then
+          sudo umount --all-targets "$part" || return 1
+        fi
+      done < <(lsblk -lnp -o NAME,TYPE "$1")
       ;;
   esac
 }
@@ -158,8 +173,11 @@ if [[ ! -r "$image" ]]; then
   echo "${RED}error${RST}: cannot read '$image'" >&2
   exit 1
 fi
-if ! file -b --mime-type "$image" | grep -q 'iso'; then
-  echo "${RED}error${RST}: invalid disk image '$image'" >&2
+# accepts anything that will work with dd: iso9660, mbr/gpt partitioned images, 
+# and UDRW dmg (a raw copy with iso/mbr inside, like this script produces).
+# compressed dmgs and random files are rejected.
+if ! file -b -- "$image" | grep -qE 'ISO 9660|(DOS/MBR|x86) boot sector|GPT partition'; then
+  echo "${RED}error${RST}: '$image' doesn't look like a raw disk image" >&2
   exit 1
 fi
 
@@ -212,7 +230,9 @@ fi
 
 # perform the write
 echo "writing ${CYN}$image${RST} to ${MGN}$device${RST}..."
-if ! sudo dd if="$image" bs=1M of="$device" status=progress; then
+# conv=fsync flushes to the device before dd returns.
+# without sync, we could echo "ok to eject" during the write.
+if ! sudo dd if="$image" bs=1M of="$device" status=progress conv=fsync; then
   echo "${RED}error${RST}: failed to write ${CYN}$image${RST} to ${MGN}$device${RST}" >&2
   exit 1
 fi
