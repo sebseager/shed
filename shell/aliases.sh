@@ -3,11 +3,15 @@
 ##
 
 alias ll='ls -lah'
-alias vi='vim'
 alias rsync='rsync -avzh --progress'
 alias k9='kill -9'
 alias big='du -am | sort -nr | head -n 20'
 alias weather='curl "v2d.wttr.in/?F"'
+
+# vi -> vim if system has vim
+if command -v vim >/dev/null 2>&1; then
+    alias vi='vim'
+fi
 
 # ls: color-capable on both gnu (linux/wsl) and bsd (macos)
 if ls --color=auto >/dev/null 2>&1; then
