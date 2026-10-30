@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# etcher - creates a bootable USB drive from a disk image (macOS only)
+# etcher - creates a bootable USB drive from a disk image (macOS/linux only)
 #
 # Because this is a bit dangerous, I haven't added a --force option. If you
 # really want to run it a bunch of times, you can pipe it through `yes`.
@@ -29,6 +29,17 @@ ITL="$(tput sitm)"
 REV="$(tput smso)"
 RST=$(tput sgr0)
 
+# check we're on a supported os before doing anything else.
+# whatsmyos exits nonzero on an os it doesn't recognize.
+os=$(whatsmyos) || os="unknown"
+case "$os" in
+  macos|linux) ;;
+  *)
+    echo "${RED}error${RST}: this script only works on macOS and Linux" >&2
+    exit 1
+    ;;
+esac
+
 # variables
 image=""
 device=""
@@ -50,55 +61,48 @@ get_args() {
   return 0
 }
 
-# lists all external disks via macOS diskutil
+# lists whole disks of the given kind (internal|external), one per line
 echo_disks() {
-  diskutil list "$1" | while IFS= read -r line; do
-    if echo "$line" | grep -qE '^/dev/disk[0-9]+[[:space:]]+\(.*\):'; then
-        dev=$(echo "$line" | awk '{print $1}')
-        info=$(diskutil info "$dev")
-        name=$(echo "$info" | awk -F ':' '/Device \/ Media Name/ {
-          gsub(/^[ \t]+/, "", $2);
-          print $2;
-          exit
-        }')
-        size=$(echo "$info" | awk -F ':' '/^ *Disk Size/ {
-          gsub(/^[ \t]+/, "", $2);
-          split($2, parts, " ");
-          print parts[1] " " parts[2];
-          exit
-        }')
-        printf "  ${MGN}${BLD}%s${RST} (%s) - ${ITL}%s${RST}\n" "$dev" "$size" "$name"
-      fi
-  done
+  case "$os" in
+    macos)
+      diskutil list "$1" | while IFS= read -r line; do
+        if echo "$line" | grep -qE '^/dev/disk[0-9]+[[:space:]]+\(.*\):'; then
+            dev=$(echo "$line" | awk '{print $1}')
+            info=$(diskutil info "$dev")
+            name=$(echo "$info" | awk -F ':' '/Device \/ Media Name/ {
+              gsub(/^[ \t]+/, "", $2);
+              print $2;
+              exit
+            }')
+            size=$(echo "$info" | awk -F ':' '/^ *Disk Size/ {
+              gsub(/^[ \t]+/, "", $2);
+              split($2, parts, " ");
+              print parts[1] " " parts[2];
+              exit
+            }')
+            printf "  ${MGN}${BLD}%s${RST} (%s) - ${ITL}%s${RST}\n" "$dev" "$size" "$name"
+          fi
+      done
+      ;;
+    linux)
+      # lsblk has no internal/external notion, only hotplug (usb, sd cards, etc.).
+      # -d whole disks only, -e 7 drops loop devices.
+      local want=0
+      [[ "$1" == "external" ]] && want=1
+      lsblk -dn -e 7 -o PATH,SIZE,HOTPLUG,MODEL | while read -r dev size hotplug model; do
+        [[ "$hotplug" == "$want" ]] || continue
+        printf "  ${MGN}${BLD}%s${RST} (%s) - ${ITL}%s${RST}\n" "$dev" "$size" "${model:-unknown}"
+      done
+      ;;
+  esac
   return 0
 }
 
-# check we're on macOS
-case "$(whatsmyos)" in
-  macos) ;;
-  *)
-    echo "${RED}error${RST}: this script only works on macOS" >&2
-    exit 1
-    ;;
-esac
-
-get_args "$@"
-
-# confirm that image exists
-if [[ ! -r "$image" ]]; then
-  echo "${RED}error${RST}: cannot read '$image'" >&2
-  exit 1
-fi
-if ! file -b --mime-type "$image" | grep -q 'iso'; then
-  echo "${RED}error${RST}: invalid disk image '$image'" >&2
-  exit 1
-fi
-
-set -e
-
-# if file ends in .iso, try to convert to .dmg
-echo
-if [[ "$image" =~ \.iso$ ]]; then
+# on macOS, maybe convert .iso to a .dmg (dd is happy with .iso on linux).
+# on success, points $image at the new dmg.
+maybe_convert_iso() {
+  [[ "$os" == "macos" && "$image" =~ \.iso$ ]] || return 0
+  local dmg answer
   dmg="${image%.iso}.dmg"
   printf "%s\n" "It looks like that's a .iso image, and I'd recommend converting it to"
   printf "%s" "a .dmg image before writing. This new image will "
@@ -126,7 +130,44 @@ if [[ "$image" =~ \.iso$ ]]; then
   else
     echo "skipping conversion and continuing with the iso"
   fi
+  return 0
+}
+
+# unmounts every mounted filesystem on the given whole disk
+unmount_disk() {
+  case "$os" in
+    macos)
+      diskutil unmountDisk "$1"
+      ;;
+    linux)
+      local part
+      # the disk itself and each of its partitions, as full paths
+      while IFS= read -r part; do
+        if findmnt -rn -S "$part" > /dev/null; then
+          sudo umount "$part" || return 1
+        fi
+      done < <(lsblk -lnp -o NAME "$1")
+      ;;
+  esac
+}
+
+get_args "$@"
+
+# confirm that image exists
+if [[ ! -r "$image" ]]; then
+  echo "${RED}error${RST}: cannot read '$image'" >&2
+  exit 1
 fi
+if ! file -b --mime-type "$image" | grep -q 'iso'; then
+  echo "${RED}error${RST}: invalid disk image '$image'" >&2
+  exit 1
+fi
+
+set -e
+
+# if file ends in .iso, ask to convert to .dmg
+echo
+maybe_convert_iso
 
 # print available devices
 echo
@@ -150,7 +191,7 @@ done
 
 # unmount the device
 echo "unmounting ${MGN}$device${RST}..."
-if ! diskutil unmountDisk "$device"; then
+if ! unmount_disk "$device"; then
   echo "${RED}error${RST}: failed to unmount ${MGN}$device${RST}" >&2
   exit 1
 fi
