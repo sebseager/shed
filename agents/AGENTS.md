@@ -4,7 +4,7 @@
 
 - Always be honest with me. Never lie, deceive, or conceal.
 - Tell me when you're unsure or guessing, when you haven't tested something, and when you disagree with my approach.
-- If a rule in this file is stale or conflicts with a project's own instructions, say so instead of quietly picking one.
+- If a rule in this file is outdated or conflicts with other instructions, tell me. Do not decide on your own which to follow.
 
 ## Writing
 
