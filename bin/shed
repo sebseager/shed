@@ -597,13 +597,13 @@ update_submodule() {
     fi
 }
 
-# shed expects each submodule to be at one particular commit. report where
-# each one stands against that, and offer to fix the ones that are off:
+# shed pins each submodule to one commit. report where each one stands
+# against its pin, and offer to fix the ones that are off:
 #   not downloaded  never checked out here                (default: fetch it)
-#   missing         the expected commit isn't here yet    (default: fetch it)
-#   behind          older than the expected commit        (default: update it)
-#   ahead           has newer commits of its own, so an update would move it
-#                   backward                              (default: leave it)
+#   behind          the pin is newer, not fetched yet     (default: fetch it)
+#   behind          the pin is newer, already fetched     (default: update it)
+#   ahead           the submodule has newer commits of its own, so an update
+#                   would move it backward                (default: leave it)
 sync_submodules() {
     [ -f "$SHED_ROOT/.gitmodules" ] || return 0
     command -v git >/dev/null 2>&1 || return 0
@@ -626,17 +626,17 @@ sync_submodules() {
         sub="$SHED_ROOT/$path"
         q=""; def=n
         case "$flag" in
-            -)  state="not downloaded"; q="fetch $path"; def=y ;;
+            -)  state="not downloaded"; q="fetch '$path'"; def=y ;;
             +)  rec="$(git -C "$SHED_ROOT" ls-files -s -- "$path" | awk '{print $2}')"
                 if ! git -C "$sub" cat-file -e "$rec^{commit}" 2>/dev/null; then
-                    state="missing the commit that shed expects"
-                    q="fetch it and switch $path to that commit"; def=y
+                    state="you're behind the pinned commit (not fetched yet)"
+                    q="fetch and update '$path'"; def=y
                 elif git -C "$sub" merge-base --is-ancestor HEAD "$rec" 2>/dev/null; then
-                    state="behind the commit that shed expects"
-                    q="update $path to that commit"; def=y
+                    state="you're behind the pinned commit"
+                    q="update '$path'"; def=y
                 else
-                    state="ahead of the commit that shed expects"
-                    q="move $path back to that commit"; def=n
+                    state="you're ahead of the pinned commit"
+                    q="move '$path' back to the pinned commit"; def=n
                 fi ;;
             U)  state="merge conflict (resolve by hand)" ;;
             *)  state="up to date" ;;
