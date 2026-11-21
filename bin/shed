@@ -629,13 +629,13 @@ sync_submodules() {
             -)  state="not downloaded"; q="fetch '$path'"; def=y ;;
             +)  rec="$(git -C "$SHED_ROOT" ls-files -s -- "$path" | awk '{print $2}')"
                 if ! git -C "$sub" cat-file -e "$rec^{commit}" 2>/dev/null; then
-                    state="you're behind the pinned commit (not fetched yet)"
+                    state="behind the pinned commit (not fetched yet)"
                     q="fetch and update '$path'"; def=y
                 elif git -C "$sub" merge-base --is-ancestor HEAD "$rec" 2>/dev/null; then
-                    state="you're behind the pinned commit"
+                    state="behind the pinned commit"
                     q="update '$path'"; def=y
                 else
-                    state="you're ahead of the pinned commit"
+                    state="ahead of the pinned commit"
                     q="move '$path' back to the pinned commit"; def=n
                 fi ;;
             U)  state="merge conflict (resolve by hand)" ;;
