@@ -16,7 +16,7 @@
 # dot/, os/<os>/dot/ and private/dot/ can all contribute files to the same
 # directory (e.g. ~/.ssh) without either clobbering the other.
 # precedence: private/dot beats os/<os>/dot beats dot. anything of yours in the
-# way (a real file, or a symlink shed didn't make) is backed up first.
+# way (a real file, or a symlink that shed did not create) is backed up first.
 #
 # agents/ (and private/agents/) hold instruction files for coding agents.
 #
@@ -349,9 +349,9 @@ choose() {
 #   lost     a higher-precedence source claimed the same destination
 #   same     already linked correctly
 #   new      nothing at the destination yet
-#   repoint  a shed link pointing at the wrong place (the shed dir moved, or
-#            another source took the destination over)
-#   replace  something of the user's is there; it is backed up, then replaced
+#   repoint  shed's own link, but pointing at the wrong place (the shed dir
+#            moved, or a different source now wins this destination)
+#   replace  the user has something there; it is backed up, then replaced
 #   skip     the user chose to leave the destination alone
 
 P_SRC=(); P_DST=(); P_STATE=()
@@ -416,8 +416,8 @@ collect_all() {
     collect_map  "$SHED_ROOT/private/agents"
 }
 
-# is the symlink at dst one shed made? yes if it matches the source about to
-# be linked there, or whatever the manifest says shed linked there last time
+# did shed create the symlink at dst? yes if it points at the source we are
+# about to link there, or at the source the manifest lists for dst
 shed_owns() {
     local dst="$1" srcrel="$2" i
     if is_our_link "$dst" "$srcrel"; then return 0; fi
@@ -452,7 +452,7 @@ plan_pairs() {
     done
 }
 
-# for each destination holding something of the user's, let them decide
+# where the user already has something at a destination, let them decide
 resolve_conflicts() {
     [ "$INTERACTIVE" -eq 1 ] || return 0
     local i dst first=1
@@ -597,12 +597,13 @@ update_submodule() {
     fi
 }
 
-# report each submodule and offer to update the ones that need it:
-#   not fetched  never checked out here                      (default: fetch)
-#   out of date  shed records a commit that isn't here yet   (default: fetch)
-#   behind       shed records a newer commit                 (default: update)
-#   ahead        holds commits shed doesn't record yet, so an update would
-#                move it backwards                           (default: leave)
+# shed expects each submodule to be at one particular commit. report where
+# each one stands against that, and offer to fix the ones that are off:
+#   not downloaded  never checked out here                (default: fetch it)
+#   missing         the expected commit isn't here yet    (default: fetch it)
+#   behind          older than the expected commit        (default: update it)
+#   ahead           has newer commits of its own, so an update would move it
+#                   backward                              (default: leave it)
 sync_submodules() {
     [ -f "$SHED_ROOT/.gitmodules" ] || return 0
     command -v git >/dev/null 2>&1 || return 0
@@ -625,22 +626,23 @@ sync_submodules() {
         sub="$SHED_ROOT/$path"
         q=""; def=n
         case "$flag" in
-            -)  state="not fetched"; q="fetch $path"; def=y ;;
+            -)  state="not downloaded"; q="fetch $path"; def=y ;;
             +)  rec="$(git -C "$SHED_ROOT" ls-files -s -- "$path" | awk '{print $2}')"
                 if ! git -C "$sub" cat-file -e "$rec^{commit}" 2>/dev/null; then
-                    state="out of date (the commit shed records isn't fetched yet)"
-                    q="fetch $path and check out the commit shed records"; def=y
+                    state="missing the commit that shed expects"
+                    q="fetch it and switch $path to that commit"; def=y
                 elif git -C "$sub" merge-base --is-ancestor HEAD "$rec" 2>/dev/null; then
-                    state="behind"; q="update $path to the commit shed records"; def=y
+                    state="behind the commit that shed expects"
+                    q="update $path to that commit"; def=y
                 else
-                    state="ahead (has commits shed doesn't record yet)"
-                    q="move $path back to the commit shed records"; def=n
+                    state="ahead of the commit that shed expects"
+                    q="move $path back to that commit"; def=n
                 fi ;;
             U)  state="merge conflict (resolve by hand)" ;;
             *)  state="up to date" ;;
         esac
         if [ "$flag" != "-" ] && [ -n "$(git -C "$sub" status --porcelain 2>/dev/null)" ]; then
-            state="$state, with uncommitted changes"
+            state="$state (has uncommitted changes)"
         fi
         printf '  %s%-14s%s %s\n' "$DIM" "$path" "$RST" "$state"
         [ -n "$q" ] || continue
