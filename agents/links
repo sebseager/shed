@@ -1,0 +1,13 @@
+# `shed install` parses this file to figure out how to link .md files in this dir.
+#
+#   <source in this dir>   <destination under $HOME>
+
+# claude code (CLAUDE.md just points at AGENTS.md)
+CLAUDE.md    .claude/CLAUDE.md
+AGENTS.md    .claude/AGENTS.md
+
+# codex
+# AGENTS.md    .codex/AGENTS.md
+
+# opencode
+# AGENTS.md    .config/opencode/AGENTS.md

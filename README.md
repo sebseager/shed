@@ -41,6 +41,10 @@ so a later `install` or `uninstall` can find it again even after the shed
 directory has moved. The ignore set lives in
 `${XDG_CONFIG_HOME:-~/.config}/shed/ignore` and survives an uninstall.
 
+Instructions for coding agents live in `agents/`. We only want to maintain 
+one copy of each instruction file, so `shed install` symlinks them into their 
+respective tool dirs using the mapping in `agents/links`.
+
 If you move the shed directory itself, every symlink dangles — including the
 shell bootstrapper, so `shed` silently falls off your `PATH`. Re-run install
 by path to repoint everything:
