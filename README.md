@@ -8,7 +8,6 @@ git clone https://github.com/sebseager/shed.git <wherever>
 cd <wherever>
 
 # 2. Symlink the dotfiles into $HOME
-# Any existing dotfiles are backed up to .whatever.bak.<timestamp> first
 bash bin/shed install
 ```
 
@@ -35,7 +34,14 @@ and if a path you ignore already holds shed links, the next `shed install`
 evicts them (any backup of your original file stays put). `ignore` and `unignore`
 only edit the persisted set. Only running `shed install` actually applies things.
 
-Pass `-n` / `--dry-run` to preview changes without touching anything. Every
+Run from a terminal, `shed install` lists its changes and asks before applying
+them. It also asks what to do with each file of yours that is in the way
+(replace it, skip it, or ignore it from now on) and whether to update a git
+submodule that is out of date. Use `-y` / `--yes` to skip the questions and
+take the defaults, which is also what happens when there is no terminal. Use
+`-S` / `--skip-modules` to leave submodules alone.
+
+Use `-n` / `--dry-run` to preview changes without touching anything. Every
 link is recorded in a manifest under `${XDG_STATE_HOME:-~/.local/state}/shed/`
 so a later `install` or `uninstall` can find it again even after the shed
 directory has moved. The ignore set lives in

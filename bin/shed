@@ -5,7 +5,9 @@
 #   shed install    symlink shed dotfiles into $HOME (leaf-level, merge-safe).
 #                   idempotent: re-run any time to converge -- link new files,
 #                   repoint links after the shed dir moves, prune links whose
-#                   source left the tree, evict links from newly ignored paths
+#                   source left the tree, evict links from newly ignored paths.
+#                   from a terminal it shows the changes and asks first;
+#                   --yes (or no terminal) takes the default answers instead
 #   shed ignore     add paths to the ignore set; with no paths, list it
 #   shed unignore   remove paths from the ignore set (interactive without args)
 #   shed uninstall  remove all symlinks shed created in $HOME
@@ -13,7 +15,10 @@
 # real directories are created in $HOME and individual files are symlinked, so
 # dot/, os/<os>/dot/ and private/dot/ can all contribute files to the same
 # directory (e.g. ~/.ssh) without either clobbering the other.
-# precedence: private/dot beats os/<os>/dot beats dot. real files are backed up.
+# precedence: private/dot beats os/<os>/dot beats dot. anything of yours in the
+# way (a real file, or a symlink shed didn't make) is backed up first.
+#
+# agents/ (and private/agents/) hold instruction files for coding agents.
 #
 # ignored paths are user territory: shed never links into or below them.
 # ignore/unignore only edit the persisted set; install applies it, evicting
@@ -29,14 +34,14 @@ set -euo pipefail
 # ---- colors ----------------------------------------------------------------
 
 if [ -t 1 ] && command -v tput >/dev/null 2>&1 && [ -n "${TERM:-}" ]; then
-    RST=$(tput sgr0);    BLD=$(tput bold);     ITL=$(tput sitm);
-    RED=$(tput setaf 1); GRN=$(tput setaf 2);  YLW=$(tput setaf 3);
-    BLU=$(tput setaf 4); CYN=$(tput setaf 6);  DIM=$(tput dim)
+    # a terminal missing a capability (TERM=dumb has none) just goes without
+    t() { tput "$@" 2>/dev/null || true; }
+    RST=$(t sgr0);    BLD=$(t bold);     ITL=$(t sitm);
+    RED=$(t setaf 1); GRN=$(t setaf 2);  YLW=$(t setaf 3);
+    BLU=$(t setaf 4); CYN=$(t setaf 6);  DIM=$(t dim)
 else
     BLD=; DIM=; ITL=; RST=; RED=; GRN=; YLW=; BLU=; CYN=
 fi
-
-IND=""   # extra indent prepended to run/act output (set within the link phase)
 
 say()    { printf '%s\n' "$*"; }
 hdr()    { printf '\n%s%s%s\n' "$BLD$CYN" "$*" "$RST"; }
@@ -44,18 +49,19 @@ field()  { printf '  %s%-6s%s %s\n' "$DIM" "$1" "$RST" "$2"; }   # label + value
 warn()   { printf '%swarning:%s %s\n' "$YLW" "$RST" "$*" >&2; }
 die()    { printf '%serror:%s %s\n' "$RED" "$RST" "$*" >&2; exit "${2:-1}"; }
 # act <color> <label> <msg> -- an aligned, colorized action line
-act()    { printf '%s  %s%-9s%s %s\n' "$IND" "$1" "$2" "$RST" "$3"; }
+act()    { printf '  %s%-9s%s %s\n' "$1" "$2" "$RST" "$3"; }
 tilde()  { case "$1" in "$HOME"|"$HOME"/*) printf '~%s' "${1#"$HOME"}" ;; *) printf '%s' "$1" ;; esac; }
 
 usage() {
     cat <<EOF
 ${BLD}shed${RST} - manage shed dotfiles
 
-${BLD}usage:${RST} shed <command> [options] [path ...]
+${BLD}usage:${RST} shed [options] <command> [options] [path ...]
 
 ${BLD}commands:${RST}
   ${GRN}install${RST}     symlink shed dotfiles into \$HOME (merge-safe, idempotent;
-              re-run any time to converge)
+              re-run any time to converge). from a terminal it shows
+              what would change and asks before doing it
   ${GRN}ignore${RST}      add paths to the ignore set; with no paths, list it
   ${GRN}unignore${RST}    remove paths from the ignore set; with no paths, pick
               from a list
@@ -64,8 +70,10 @@ ${BLD}commands:${RST}
 
 ${BLD}options:${RST}
   -n, --dry-run           show what would change without touching anything
-  -S, --skip-modules      install: do not init/pull git submodules
+  -y, --yes               install: don't ask, take the default answers
+  -S, --skip-modules      install: leave git submodules alone
   -a, --all               unignore: clear the entire ignore set
+  -h, --help              show this message
 EOF
 }
 
@@ -73,26 +81,32 @@ EOF
 
 CMD=""
 DRY_RUN=0
+YES=0
 SKIP_SUBMODULES=0
 ALL=0
 PATHS=()
 
 bad_usage() { printf '%serror:%s %s\n\n' "$RED" "$RST" "$*" >&2; usage >&2; exit 2; }
 
-case "${1:-}" in
-    install|uninstall|ignore|unignore) CMD="$1"; shift ;;
-    help|-h|--help)                    usage; exit 0 ;;
-    "")                                usage >&2; exit 2 ;;
-    *)                                 bad_usage "unknown command: $1" ;;
-esac
-
+# options can sit before or after the command. the first bare word is the
+# command; any bare words after it are paths.
 for arg in "$@"; do
     case "$arg" in
+        -h|--help)         usage; exit 0 ;;
         -n|--dry-run)      DRY_RUN=1 ;;
+        -y|--yes)          YES=1 ;;
         -S|--skip-modules) SKIP_SUBMODULES=1 ;;
         -a|--all)          ALL=1 ;;
         -*)                bad_usage "unknown option: $arg" ;;
         *)
+            if [ -z "$CMD" ]; then
+                case "$arg" in
+                    install|uninstall|ignore|unignore) CMD="$arg" ;;
+                    help) usage; exit 0 ;;
+                    *)    bad_usage "unknown command: $arg" ;;
+                esac
+                continue
+            fi
             case "$CMD" in
                 ignore|unignore) ;;
                 *) bad_usage "$CMD takes no path arguments" ;;
@@ -108,9 +122,17 @@ for arg in "$@"; do
     esac
 done
 
-if [ "$ALL" -eq 1 ] && [ "$CMD" != "unignore" ]; then
-    bad_usage "--all only applies to unignore"
-fi
+if [ -z "$CMD" ]; then usage >&2; exit 2; fi
+
+# an option that doesn't apply to the command is an error, not a no-op
+only_for() {    # only_for <value> <command> <option>
+    if [ "$1" -eq 1 ] && [ "$CMD" != "$2" ]; then
+        bad_usage "$3 only applies to $2"
+    fi
+}
+only_for "$YES"             install  --yes
+only_for "$SKIP_SUBMODULES" install  --skip-modules
+only_for "$ALL"             unignore --all
 
 # ---- locate shed -----------------------------------------------------------
 
@@ -143,7 +165,7 @@ STAMP="$(date +%Y%m%d%H%M%S)"
 MANIFEST="${XDG_STATE_HOME:-$HOME/.local/state}/shed/manifest"
 IGNORE="${XDG_CONFIG_HOME:-$HOME/.config}/shed/ignore"
 
-run() { if [ "$DRY_RUN" -eq 1 ]; then printf '%s  %s[dry-run]%s %s\n' "$IND" "$DIM" "$RST" "$*"; else "$@"; fi; }
+run() { if [ "$DRY_RUN" -eq 1 ]; then printf '  %s[dry-run]%s %s\n' "$DIM" "$RST" "$*"; else "$@"; fi; }
 
 # windows (git bash / msys): ln -s produces a COPY by default, which silently
 # breaks shed's whole premise -- dotfiles must be real links for repo edits to
@@ -275,54 +297,252 @@ write_manifest() {
     fi
 }
 
-# ---- linking ---------------------------------------------------------------
+# ---- prompts ---------------------------------------------------------------
+#
+# install asks before it changes anything, but only when someone is there to
+# answer: a terminal on both ends, and neither --yes nor --dry-run. otherwise
+# every question takes its default.
 
-link_one() {
-    local src="$1" dst="$2" srcrel dstdir cur bak
-    srcrel="${src#"$SHED_ROOT"/}"
-    dstdir="$(dirname "$dst")"
-    [ -d "$dstdir" ] || run mkdir -p "$dstdir"
+INTERACTIVE=0
 
-    record_link "$dst" "$srcrel"
-
-    if [ -L "$dst" ]; then
-        cur="$(readlink "$dst")"
-        cur="${cur//\\//}"    # native windows symlinks can read back with backslashes
-        [ "$cur" = "$src" ] && return 0          # already correct, idempotent
-        act "$YLW" "override:" "${dst#$HOME/}"
-        printf '%s            %s%s -> %s%s\n' "$IND" "$DIM" "$cur" "$src" "$RST"
-        run rm -f "$dst"
-    elif [ -e "$dst" ]; then
-        bak="$dst.bak.$STAMP"
-        act "$YLW" "backup:" "${dst#$HOME/} -> ${bak##*/}"
-        run mv "$dst" "$bak"
+# ask <question> <default: y|n> -- returns 0 for yes
+ask() {
+    local q="$1" def="$2" hint="y/N" reply
+    [ "$def" = y ] && hint="Y/n"
+    if [ "$INTERACTIVE" -eq 1 ]; then
+        while :; do
+            printf '  %s?%s %s? [%s] ' "$BLD$BLU" "$RST" "$q" "$hint"
+            read -r reply || { reply=""; printf '\n'; }
+            case "$reply" in
+                y|Y|yes|Yes|YES) return 0 ;;
+                n|N|no|No|NO)    return 1 ;;
+                "")              break ;;
+            esac
+        done
     fi
-
-    run ln -s "$src" "$dst"
-    act "$GRN" "link:" "${dst#$HOME/}"
+    [ "$def" = y ]
 }
 
-link_tree() {
-    local root="$1" f rel
+# choose <question> <default letter> <valid letters> -- sets CHOICE
+CHOICE=""
+choose() {
+    local q="$1" def="$2" valid="$3" reply
+    CHOICE="$def"
+    [ "$INTERACTIVE" -eq 1 ] || return 0
+    while :; do
+        printf '  %s?%s %s [%s] ' "$BLD$BLU" "$RST" "$q" "$def"
+        read -r reply || { reply=""; printf '\n'; }
+        [ -n "$reply" ] || return 0
+        reply="$(printf '%s' "$reply" | tr 'A-Z' 'a-z')"
+        reply="${reply:0:1}"
+        case "$valid" in *"$reply"*) CHOICE="$reply"; return 0 ;; esac
+    done
+}
+
+# ---- linking ---------------------------------------------------------------
+#
+# install runs in three steps, so it can show (and ask about) every change
+# before it touches $HOME: collect each source/destination pair, plan what
+# each one needs, then apply.
+#
+# P_STATE, per pair:
+#   lost     a higher-precedence source claimed the same destination
+#   same     already linked correctly
+#   new      nothing at the destination yet
+#   repoint  a shed link pointing at the wrong place (the shed dir moved, or
+#            another source took the destination over)
+#   replace  something of the user's is there; it is backed up, then replaced
+#   skip     the user chose to leave the destination alone
+
+P_SRC=(); P_DST=(); P_STATE=()
+PRUNE=()            # old shed links to remove
+NEW_DSTS=$'\n'      # newline-delimited destinations shed owns after this run
+CHANGES=0
+IGNORE_CHANGED=0
+
+# pairs arrive in ascending precedence, so a later one takes the destination
+add_pair() {
+    local src="$1" dst="$2" i
+    for ((i = 0; i < ${#P_DST[@]}; i++)); do
+        if [ "${P_DST[$i]}" = "$dst" ]; then P_STATE[$i]=lost; fi
+    done
+    P_SRC+=("$src"); P_DST+=("$dst"); P_STATE+=("")
+}
+
+# a dot/ tree mirrors into $HOME file by file
+collect_tree() {
+    local root="$1" f dst
     [ -d "$root" ] || return 0
-    printf '  %sfrom %s%s\n' "$DIM" "${root#$SHED_ROOT/}" "$RST"
-    IND="  "
     while IFS= read -r -d '' f; do
-        rel="${f#"$root"/}"
-        local dst="$HOME/$rel"
+        dst="$HOME/${f#"$root"/}"
         if is_ignored "$dst"; then
             continue
         fi
-        link_one "$f" "$dst"
+        add_pair "$f" "$dst"
     done < <(find "$root" -type f -print0)
-    IND=""
 }
 
-# link in ascending precedence: base, then os-specific, then private
-link_all() {
-    link_tree "$SHED_ROOT/dot"
-    link_tree "$SHED_ROOT/os/$SHED_OS/dot"
-    link_tree "$SHED_ROOT/private/dot"
+# agent instruction files don't mirror into $HOME the way dot/ does.
+# instead, we read "<source> <destination>" pairs from <root>/links, where 
+# source is relative to <root> and destination relative to $HOME.
+collect_map() {
+    local root="$1" src dst
+    [ -f "$root/links" ] || return 0
+    while read -r src dst || [ -n "$src" ]; do
+        case "$src" in ""|"#"*) continue ;; esac
+        if [ -z "$dst" ]; then
+            warn "${root#$SHED_ROOT/}/links: no destination for $src"
+            continue
+        fi
+        if [ ! -f "$root/$src" ]; then
+            warn "${root#$SHED_ROOT/}/links: no such source: $src"
+            continue
+        fi
+        dst="$HOME/${dst#/}"
+        if is_ignored "$dst"; then
+            continue
+        fi
+        add_pair "$root/$src" "$dst"
+    done < "$root/links"
+}
+
+# ascending precedence: base, then os-specific, then private
+collect_all() {
+    P_SRC=(); P_DST=(); P_STATE=()
+    collect_tree "$SHED_ROOT/dot"
+    collect_tree "$SHED_ROOT/os/$SHED_OS/dot"
+    collect_tree "$SHED_ROOT/private/dot"
+    collect_map  "$SHED_ROOT/agents"
+    collect_map  "$SHED_ROOT/private/agents"
+}
+
+# is the symlink at dst one shed made? yes if it matches the source about to
+# be linked there, or whatever the manifest says shed linked there last time
+shed_owns() {
+    local dst="$1" srcrel="$2" i
+    if is_our_link "$dst" "$srcrel"; then return 0; fi
+    for ((i = 0; i < ${#MF_DST[@]}; i++)); do
+        if [ "${MF_DST[$i]}" = "$dst" ] && is_our_link "$dst" "${MF_REL[$i]}"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+plan_pairs() {
+    local i src dst cur
+    for ((i = 0; i < ${#P_DST[@]}; i++)); do
+        [ -z "${P_STATE[$i]}" ] || continue
+        src="${P_SRC[$i]}"; dst="${P_DST[$i]}"
+        if [ -L "$dst" ]; then
+            cur="$(readlink "$dst")"
+            cur="${cur//\\//}"    # native windows symlinks can read back with backslashes
+            if [ "$cur" = "$src" ]; then
+                P_STATE[$i]=same
+            elif shed_owns "$dst" "${src#"$SHED_ROOT"/}"; then
+                P_STATE[$i]=repoint
+            else
+                P_STATE[$i]=replace
+            fi
+        elif [ -e "$dst" ]; then
+            P_STATE[$i]=replace
+        else
+            P_STATE[$i]=new
+        fi
+    done
+}
+
+# for each destination holding something of the user's, let them decide
+resolve_conflicts() {
+    [ "$INTERACTIVE" -eq 1 ] || return 0
+    local i dst first=1
+    for ((i = 0; i < ${#P_DST[@]}; i++)); do
+        [ "${P_STATE[$i]}" = replace ] || continue
+        dst="${P_DST[$i]}"
+        if [ "$first" -eq 1 ]; then hdr "conflicts"; first=0; fi
+        printf '  %s%s%s already exists and is not a shed link.\n' "$BLD" "$(tilde "$dst")" "$RST"
+        choose "[r]eplace it (a backup is kept), [s]kip it this time, or [i]gnore it from now on?" r rsi
+        case "$CHOICE" in
+            s) P_STATE[$i]=skip ;;
+            i) P_STATE[$i]=skip; IGNORES+=("$dst"); IGNORE_CHANGED=1 ;;
+        esac
+    done
+}
+
+# tracked links that shouldn't exist anymore: destination now ignored (evict
+# -- that territory is the user's) or source gone from the shed tree. only
+# ever lists links that are ours.
+plan_prunes() {
+    PRUNE=(); NEW_DSTS=$'\n'
+    local i
+    for ((i = 0; i < ${#P_DST[@]}; i++)); do
+        case "${P_STATE[$i]}" in lost|skip) continue ;; esac
+        NEW_DSTS="$NEW_DSTS${P_DST[$i]}"$'\n'
+    done
+    for ((i = 0; i < ${#MF_DST[@]}; i++)); do
+        case "$NEW_DSTS" in *$'\n'"${MF_DST[$i]}"$'\n'*) continue ;; esac
+        is_our_link "${MF_DST[$i]}" "${MF_REL[$i]}" || continue
+        PRUNE+=("${MF_DST[$i]}")
+    done
+}
+
+show_plan() {
+    local i dst from same=0 b
+    CHANGES=0
+    hdr "changes"
+    for ((i = 0; i < ${#P_DST[@]}; i++)); do
+        dst="${P_DST[$i]}"
+        from="$DIM<- ${P_SRC[$i]#"$SHED_ROOT"/}$RST"
+        case "${P_STATE[$i]}" in
+            same)    same=$((same + 1)); continue ;;
+            new)     act "$GRN" "link:"    "${dst#"$HOME"/} $from" ;;
+            repoint) act "$YLW" "repoint:" "${dst#"$HOME"/} $from" ;;
+            replace) act "$YLW" "replace:" "${dst#"$HOME"/} $from"
+                     printf '            %syours is kept as %s.bak.%s%s\n' "$DIM" "${dst##*/}" "$STAMP" "$RST" ;;
+            skip)    act "$DIM" "skip:"    "${dst#"$HOME"/} (left alone)"; continue ;;
+            *)       continue ;;
+        esac
+        CHANGES=$((CHANGES + 1))
+    done
+    for dst in ${PRUNE[@]+"${PRUNE[@]}"}; do
+        if is_ignored "$dst"; then
+            act "$YLW" "evict:" "${dst#"$HOME"/} (now ignored)"
+            for b in "$dst".bak.*; do
+                [ -e "$b" ] &&
+                    printf '            %sbackup left in place: %s%s\n' "$DIM" "${b#"$HOME"/}" "$RST"
+            done
+        else
+            act "$RED" "remove:" "${dst#"$HOME"/} (no longer in shed)"
+        fi
+        CHANGES=$((CHANGES + 1))
+    done
+    if [ "$CHANGES" -eq 0 ]; then
+        printf '  %snone: %d link(s) already in place%s\n' "$DIM" "$same" "$RST"
+    elif [ "$same" -gt 0 ]; then
+        printf '  %s(%d more already in place)%s\n' "$DIM" "$same" "$RST"
+    fi
+}
+
+apply_plan() {
+    local i src dst dir
+    for ((i = 0; i < ${#P_DST[@]}; i++)); do
+        src="${P_SRC[$i]}"; dst="${P_DST[$i]}"
+        case "${P_STATE[$i]}" in lost|skip) continue ;; esac
+        record_link "$dst" "${src#"$SHED_ROOT"/}"
+        [ "$DRY_RUN" -eq 0 ] || continue
+        case "${P_STATE[$i]}" in
+            same)    continue ;;
+            repoint) rm -f "$dst" ;;
+            replace) mv "$dst" "$dst.bak.$STAMP" ;;
+        esac
+        dir="$(dirname "$dst")"
+        [ -d "$dir" ] || mkdir -p "$dir"
+        ln -s "$src" "$dst"
+    done
+    [ "$DRY_RUN" -eq 0 ] || return 0
+    for dst in ${PRUNE[@]+"${PRUNE[@]}"}; do
+        rm -f "$dst"
+    done
 }
 
 # warn about bootstrap-critical files that didn't get linked -- without them,
@@ -363,7 +583,27 @@ secure_ssh() {
 
 # ---- submodules ------------------------------------------------------------
 
-show_submodules() {
+update_submodule() {
+    local path="$1"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        run git -C "$SHED_ROOT" submodule update --init --recursive -- "$path"
+    elif ! git -C "$SHED_ROOT" submodule update --init --recursive -- "$path"; then
+        printf '%s\n' "$YLW"
+        say "| Could not update $path. Do you have access?"
+        say "| We'll skip for now. Once you can reach the repo, run:"
+        say "|   git -C \"$SHED_ROOT\" submodule update --init --recursive -- \"$path\""
+        say "| then re-run shed install."
+        printf '%s\n' "$RST"
+    fi
+}
+
+# report each submodule and offer to update the ones that need it:
+#   not fetched  never checked out here                      (default: fetch)
+#   out of date  shed records a commit that isn't here yet   (default: fetch)
+#   behind       shed records a newer commit                 (default: update)
+#   ahead        holds commits shed doesn't record yet, so an update would
+#                move it backwards                           (default: leave)
+sync_submodules() {
     [ -f "$SHED_ROOT/.gitmodules" ] || return 0
     command -v git >/dev/null 2>&1 || return 0
     if [ "$SKIP_SUBMODULES" -eq 1 ]; then
@@ -371,28 +611,44 @@ show_submodules() {
     else
         hdr "modules"
     fi
-    git config --file "$SHED_ROOT/.gitmodules" --get-regexp '^submodule\..*\.path$' |
-        while read -r key path; do
-            local name url
-            name=${key#submodule.}; name=${name%.path}
-            url=$(git config --file "$SHED_ROOT/.gitmodules" --get "submodule.$name.url" || true)
-            printf '  %s%-14s%s %s\n' "$DIM" "$path" "$RST" "$url"
-        done || true
-}
 
-init_submodules() {
-    [ -f "$SHED_ROOT/.gitmodules" ] || return 0
-    command -v git >/dev/null 2>&1 || return 0
-    if [ "$DRY_RUN" -eq 1 ]; then
-        run git -C "$SHED_ROOT" submodule update --init --recursive
-    elif ! git -C "$SHED_ROOT" submodule update --init --recursive; then
-        printf '%s\n' "$YLW"
-        say "| Could not init submodules. Do you have access?"
-        say "| We'll skip for now. Once you can reach the repo, run:"
-        say "|   git -C \"$SHED_ROOT\" submodule update --init --recursive"
-        say "| then re-run shed install."
-        printf '%s\n' "$RST"
-    fi
+    # read the list up front: the questions below need stdin for themselves
+    local lines=() line
+    while IFS= read -r line; do
+        lines+=("$line")
+    done < <(git -C "$SHED_ROOT" submodule status 2>/dev/null || true)
+
+    local flag path sub rec state q def
+    for line in ${lines[@]+"${lines[@]}"}; do
+        flag="${line:0:1}"
+        path="${line:1}"; path="${path#* }"; path="${path% (*}"
+        sub="$SHED_ROOT/$path"
+        q=""; def=n
+        case "$flag" in
+            -)  state="not fetched"; q="fetch $path"; def=y ;;
+            +)  rec="$(git -C "$SHED_ROOT" ls-files -s -- "$path" | awk '{print $2}')"
+                if ! git -C "$sub" cat-file -e "$rec^{commit}" 2>/dev/null; then
+                    state="out of date (the commit shed records isn't fetched yet)"
+                    q="fetch $path and check out the commit shed records"; def=y
+                elif git -C "$sub" merge-base --is-ancestor HEAD "$rec" 2>/dev/null; then
+                    state="behind"; q="update $path to the commit shed records"; def=y
+                else
+                    state="ahead (has commits shed doesn't record yet)"
+                    q="move $path back to the commit shed records"; def=n
+                fi ;;
+            U)  state="merge conflict (resolve by hand)" ;;
+            *)  state="up to date" ;;
+        esac
+        if [ "$flag" != "-" ] && [ -n "$(git -C "$sub" status --porcelain 2>/dev/null)" ]; then
+            state="$state, with uncommitted changes"
+        fi
+        printf '  %s%-14s%s %s\n' "$DIM" "$path" "$RST" "$state"
+        [ -n "$q" ] || continue
+        [ "$SKIP_SUBMODULES" -eq 0 ] || continue
+        if ask "$q" "$def"; then
+            update_submodule "$path"
+        fi
+    done
 }
 
 # ---- shared preamble / epilogue -------------------------------------------
@@ -421,52 +677,37 @@ cmd_install() {
     require_real_symlinks
     read_ignore || true
 
-    preamble
-    show_submodules
-    if [ "$SKIP_SUBMODULES" -eq 0 ]; then
-        init_submodules
+    if [ "$YES" -eq 0 ] && [ "$DRY_RUN" -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
+        INTERACTIVE=1
     fi
 
-    # previous links, to converge against below
+    preamble
+    sync_submodules
+
+    # previous links, to converge against
     read_manifest || true
 
-    # relink the current tree; link_one repoints any stale (moved) symlinks
-    hdr "linking"
-    link_all
+    collect_all
+    plan_pairs
+    resolve_conflicts
+    plan_prunes
+    show_plan
 
-    # prune tracked links that shouldn't exist anymore: destination newly
-    # ignored (evict -- that territory is the user's) or source left the shed
-    # tree. only ever touches links that are ours.
-    local new_dsts=$'\n' line
-    for line in ${MANIFEST_LINES[@]+"${MANIFEST_LINES[@]}"}; do
-        new_dsts="$new_dsts${line%%$'\t'*}"$'\n'
-    done
-    local i b pruned=0
-    for ((i = 0; i < ${#MF_DST[@]}; i++)); do
-        case "$new_dsts" in *$'\n'"${MF_DST[$i]}"$'\n'*) continue ;; esac
-        is_our_link "${MF_DST[$i]}" "${MF_REL[$i]}" || continue
-        [ "$pruned" -gt 0 ] || hdr "pruning"
-        pruned=$((pruned + 1))
-        if is_ignored "${MF_DST[$i]}"; then
-            act "$YLW" "evict:" "${MF_DST[$i]#$HOME/} (now ignored)"
-            for b in "${MF_DST[$i]}".bak.*; do
-                [ -e "$b" ] &&
-                    printf '            %sbackup left in place: %s%s\n' "$DIM" "${b#$HOME/}" "$RST"
-            done
-        else
-            act "$RED" "remove:" "${MF_DST[$i]#$HOME/} (no longer in shed)"
+    if [ "$CHANGES" -gt 0 ] && [ "$INTERACTIVE" -eq 1 ]; then
+        if ! ask "apply $CHANGES change(s)" y; then
+            say "nothing changed."
+            return 0
         fi
-        run rm -f "${MF_DST[$i]}"
-    done
+    fi
 
+    if [ "$IGNORE_CHANGED" -eq 1 ]; then write_ignore; fi
+    apply_plan
     write_manifest
     secure_ssh
-    check_bootstrap "$new_dsts"
+    check_bootstrap "$NEW_DSTS"
 
-    local extra=""
-    [ "$pruned" -gt 0 ] && extra=", removed $pruned old link(s)"
-    epilogue "installed ${#MANIFEST_LINES[@]} dotfile(s)$extra"
-    if [ "$DRY_RUN" -eq 0 ]; then
+    epilogue "${#MANIFEST_LINES[@]} dotfile(s) linked, $CHANGES change(s)"
+    if [ "$DRY_RUN" -eq 0 ] && [ "$CHANGES" -gt 0 ]; then
         printf '%s(open a new shell, or exec $SHELL, to pick up PATH changes)%s\n' "$DIM" "$RST"
     fi
 }
@@ -539,7 +780,7 @@ cmd_unignore() {
         local reply n
         read -r reply || reply=""
         case "$reply" in
-            "")    say "cancelled."; return 0 ;;
+            "")    say "canceled."; return 0 ;;
             a|all) drop=("${IGNORES[@]}") ;;
             *)
                 for n in ${reply//,/ }; do
