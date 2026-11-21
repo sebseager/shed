@@ -2,9 +2,8 @@
 #
 #   <source in this dir>   <destination under $HOME>
 
-# claude code (CLAUDE.md just points at AGENTS.md)
+# claude code (the harness resolves CLAUDE.md and finds AGENTS.md next to it)
 CLAUDE.md    .claude/CLAUDE.md
-AGENTS.md    .claude/AGENTS.md
 
 # codex
 # AGENTS.md    .codex/AGENTS.md
